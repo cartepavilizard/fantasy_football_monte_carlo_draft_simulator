@@ -18,11 +18,14 @@ services:
     ports:
       - 3000:3000
   fastapi-backend:
-    build: 
+    build:
       context: ./backend
       dockerfile: Dockerfile
     container_name: fastapi-backend
     restart: always
+    environment:
+      - LOCAL=false
+      - DRAFT_YEAR=2024  # must match the Season column in your players CSV
     ports:
       - 8000:8000
     volumes:

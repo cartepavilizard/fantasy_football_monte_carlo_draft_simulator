@@ -140,9 +140,11 @@ def create_historical_distributions(
 
         # For each year available in the player's points, get the percentage adjustment
         for year, points in player.points.items():
-            if points.actual_points and int(year) < int(
-                draft_year
-            ):  # Only use historical data
+            if (
+                points.actual_points is not None
+                and points.projected_points > 0
+                and int(year) < int(draft_year)
+            ):  # Only use historical data; keep 0-point (injury) seasons
                 distributions[player.position_tier].append(
                     (points.actual_points - points.projected_points)
                     / points.projected_points

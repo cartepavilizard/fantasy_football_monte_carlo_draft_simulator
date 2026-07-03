@@ -269,7 +269,8 @@ def monte_carlo_draft(
     """
     simulator_team = [i for i, team in enumerate(league.teams) if team.simulator]
     results = {"qb": [], "rb": [], "wr": [], "te": []}
-    if league.current_draft_turn > ROUND_SIZE * 7:  # Add DST & K after round 7
+    # Add DST & K after round 7 (turns = teams per round * 7 rounds)
+    if league.current_draft_turn > len(league.teams) * 7:
         results["dst"] = []
         results["k"] = []
 

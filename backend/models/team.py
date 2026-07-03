@@ -126,7 +126,7 @@ class Team(EmbeddedModel):
         position_weights = {}
         probabilities = model.predict_proba([[pick_number]])[0]
         for i, position in enumerate(model.classes_):
-            position_weights[position] = probabilities[i]
+            position_weights[position.lower()] = probabilities[i]
 
         # For each position, check if the starters are filled
         starting_positions = ["qb", "rb", "wr", "te", "dst", "k"]
@@ -146,6 +146,13 @@ class Team(EmbeddedModel):
 
         # Recalculate the total weight and return the position weights
         total_weight = sum(position_weights.values())
+        if total_weight == 0:
+            open_positions = [
+                p
+                for p in starting_positions
+                if len(getattr(self, p)) < ps.model_dump()[p]
+            ]
+            return {p: 1 / len(open_positions) for p in open_positions}
         return {
             position: weight / total_weight
             for position, weight in position_weights.items()

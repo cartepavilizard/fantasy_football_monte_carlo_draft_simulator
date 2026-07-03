@@ -347,7 +347,7 @@ async def create_league(
         )
     league = League(
         teams=teams,
-        snake_draft=SNAKE_DRAFT,
+        snake_draft=snake_draft,
         name=name,
         round_size=round_size,
         roster_size=roster_size,

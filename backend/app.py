@@ -194,6 +194,10 @@ def simulate_pick(
     weights = list(weights.values())
     position_players = []
     while len(position_players) == 0:
+        # If the total weights are zero, just go random
+        # (this can happen at the end of the draft)
+        if sum(weights) == 0:
+            weights = [1 for _ in positions]
         selection = random.choices(positions, weights=weights)[0]
         position_players = [
             x for x in getattr(players, selection) if x.drafted == False
@@ -201,13 +205,9 @@ def simulate_pick(
 
         # If there are no players left in that position, remove it from the list
         if len(position_players) == 0:
-            weights.remove(weights[positions.index(selection)])
-            positions.remove(selection)
-
-            # If the total weights are zero, reset them and just go random
-            # (this can happen at the end of the draft)
-            if sum(weights) == 0:
-                weights = [1 for _ in positions]
+            index = positions.index(selection)
+            positions.pop(index)
+            weights.pop(index)
 
     # Draft the best draftable player within that position
     player = position_players[0]

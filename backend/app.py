@@ -738,11 +738,7 @@ async def get_drafts():
     """
     Get all drafts from leagues that exist
     """
-    leagues = await engine.find(League)
-    drafts = []
-    for league in leagues:
-        drafts += await engine.find(Draft, Draft.league == league.id)
-    return drafts
+    return await engine.find(Draft)
 
 
 @app.post("/draft/{draft_id}/pick", response_model=Draft, tags=["draft"])

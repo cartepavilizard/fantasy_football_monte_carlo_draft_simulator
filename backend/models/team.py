@@ -279,6 +279,9 @@ class League(Model):
         Sort the teams into their draft order and then create a list of their indices
         to help populate the draft results and validate whether a league is ready to draft
         """
+        data.setdefault("teams", [])
+        data.setdefault("current_draft_turn", 0)
+        data.setdefault("snake_draft", SNAKE_DRAFT)
         if not all([isinstance(team, Team) for team in data["teams"]]):
             data["teams"] = [Team(**team) for team in data["teams"]]
         if "logistic_regression_variables" in data and not (

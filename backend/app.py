@@ -678,6 +678,8 @@ async def make_draft_pick(
     Make a draft pick by name or using the simulator
     """
     draft = await get_a_draft_by_id(draft_id)
+    if not draft.league.draft_order:
+        raise HTTPException(status_code=400, detail="Draft is complete")
     if name and use_simulator:
         raise HTTPException(
             status_code=400, detail="Cannot include a name and use the simulator"
@@ -723,6 +725,8 @@ async def run_monte_carlo_simulation(draft_id: ObjectId):
     Run a Monte Carlo simulation to determine the best position to draft
     """
     draft = await get_a_draft_by_id(draft_id)
+    if not draft.league.draft_order:
+        raise HTTPException(status_code=400, detail="Draft is complete")
     return monte_carlo_draft(draft.league)
 
 

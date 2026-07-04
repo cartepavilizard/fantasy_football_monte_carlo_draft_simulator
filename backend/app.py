@@ -105,6 +105,22 @@ async def get_a_draft_by_id(draft_id: ObjectId) -> Draft:
     return draft
 
 
+def read_csv_upload(content: bytes, required_columns: set) -> list:
+    """
+    Parse an uploaded CSV and 422 with a clear message on bad shape
+    """
+    rows = list(csv.DictReader(content.decode("utf-8-sig").splitlines()))
+    if not rows:
+        raise HTTPException(status_code=422, detail="CSV file is empty")
+    missing = required_columns - set(rows[0].keys())
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=f"CSV missing required columns: {sorted(missing)}",
+        )
+    return rows
+
+
 def create_max_points(
     players: Players, draft_year: str = str(DRAFT_YEAR)
 ) -> PositionMaxPoints:
@@ -350,7 +366,9 @@ async def create_league(
         dst=dst_size,
         k=k_size,
     )
-    data = csv.DictReader((await file.read()).decode("utf-8-sig").splitlines())
+    data = read_csv_upload(
+        await file.read(), {"Name", "Order", "Owner", "Simulator"}
+    )
     teams = []
     for row in data:
         teams.append(
@@ -458,7 +476,9 @@ async def add_players_to_league(
         )
 
     # Read the CSV file and create players
-    data = csv.DictReader((await file.read()).decode("utf-8-sig").splitlines())
+    data = read_csv_upload(
+        await file.read(), {"Season", "Player", "Pos", "Team", "Projected FFP"}
+    )
     players = []
     for row in data:
         players.append(
@@ -546,7 +566,10 @@ async def add_historical_player_data_to_league(
         )
 
     # Read the CSV file and create players
-    data = csv.DictReader((await file.read()).decode("utf-8-sig").splitlines())
+    data = read_csv_upload(
+        await file.read(),
+        {"Season", "Player", "Pos", "Team", "Projected FFP", "Actual FFP"},
+    )
     players = []
     for row in data:
         players.append(
@@ -620,7 +643,7 @@ async def add_historical_draft_data_to_league(
         )
 
     # Read the CSV file and create logistic regression variables
-    data = csv.DictReader((await file.read()).decode("utf-8-sig").splitlines())
+    data = read_csv_upload(await file.read(), {"Pick", "Pos"})
     x = []
     y = []
     for row in data:

@@ -12,7 +12,8 @@ from .config import (
     TE_SIZE,
     WR_SIZE,
 )
-from odmantic import EmbeddedModel, Model
+from odmantic import EmbeddedModel
+from pydantic import BaseModel
 from typing import List
 
 
@@ -65,7 +66,7 @@ class PositionMaxPoints(EmbeddedModel):
     k: float = 0
 
 
-class PositionTiers(Model):
+class PositionTiers(BaseModel):
     """
     The index of the last player (when sorted by projected points)
     for each position tier, which are by default based on a

@@ -4,8 +4,8 @@ ODMANTIC MODELS FOR PLAYERS
 """
 from .config import DRAFT_YEAR, MAX_RANDOM_ADJUSTMENT
 from .position import PositionMaxPoints, PositionTierDistributions, PositionTiers
-from odmantic import EmbeddedModel, Model
-from pydantic import field_validator, model_validator
+from odmantic import EmbeddedModel
+from pydantic import BaseModel, field_validator, model_validator
 import random
 from typing import Dict, List, Union
 
@@ -23,7 +23,7 @@ class PlayerPoints(EmbeddedModel):
     actual_points: Union[float, None] = None  # Will be none for current draft year
 
 
-class PlayerPointsRandomized(Model):
+class PlayerPointsRandomized(BaseModel):
     """
     Information about a random projection of points for a player,
     including the total adjustment to the original projection

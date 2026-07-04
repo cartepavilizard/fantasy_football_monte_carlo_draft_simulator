@@ -224,6 +224,8 @@ def draft_player(player_name: str, league: League):
         raise HTTPException(status_code=404, detail="Player not found")
     else:
         player = player[0]
+    if player.drafted:
+        raise HTTPException(status_code=400, detail="Player already drafted")
 
     # Set the player as drafted within the league
     position = player.position.lower()

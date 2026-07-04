@@ -270,6 +270,10 @@ def monte_carlo_draft(
     to determine which position is best to draft
     """
     simulator_team = [i for i, team in enumerate(league.teams) if team.simulator]
+    if not simulator_team:
+        raise HTTPException(
+            status_code=400, detail="League has no simulator team"
+        )
     results = {"qb": [], "rb": [], "wr": [], "te": []}
     # Add DST & K after round 7 (turns = teams per round * 7 rounds)
     if league.current_draft_turn > len(league.teams) * 7:

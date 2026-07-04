@@ -10,6 +10,7 @@ from odmantic import AIOEngine, ObjectId
 import random
 from sklearn.base import RegressorMixin
 from sklearn.linear_model import LogisticRegression
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.cors import CORSMiddleware
 import time
 from typing import List
@@ -336,6 +337,23 @@ def monte_carlo_draft(
         )
     results["iterations"] = i
     return MonteCarloSimulationResult(**results)
+
+
+def compute_draft_results(league: League) -> dict:
+    """
+    Run each team's randomized starter points 1000x and average them
+    """
+    results = {}
+    for team in league.teams:
+        points = [
+            team.randomized_starter_points(
+                distributions=league.position_tier_distributions,
+                max_points=league.position_max_points,
+            )
+            for _ in range(1000)
+        ]
+        results[team.name] = round(sum(points) / len(points), 2)
+    return results
 
 
 # Routes
@@ -781,7 +799,7 @@ async def run_monte_carlo_simulation(draft_id: ObjectId):
     draft = await get_a_draft_by_id(draft_id)
     if not draft.league.draft_order:
         raise HTTPException(status_code=400, detail="Draft is complete")
-    return monte_carlo_draft(draft.league)
+    return await run_in_threadpool(monte_carlo_draft, draft.league)
 
 
 # Get the results of a draft by running each team's randomized points 1000x times
@@ -795,15 +813,4 @@ async def get_draft_results(draft_id: ObjectId):
     Get the results of a draft by running each team's randomized points 1000x times
     """
     draft = await get_a_draft_by_id(draft_id)
-    results = {}
-    for team in draft.league.teams:
-        points = []
-        for _ in range(1000):
-            points.append(
-                team.randomized_starter_points(
-                    distributions=draft.league.position_tier_distributions,
-                    max_points=draft.league.position_max_points,
-                )
-            )
-        results[team.name] = round(sum(points) / len(points), 2)
-    return results
+    return await run_in_threadpool(compute_draft_results, draft.league)

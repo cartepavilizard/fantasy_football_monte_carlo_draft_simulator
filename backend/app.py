@@ -377,9 +377,8 @@ async def create_league(
                 draft_order=row["Order"],
                 owner=row["Owner"],
                 position_sizes=position_sizes,
-                simulator=row["Simulator"] == "True"
-                or row["Simulator"] == 1
-                or row["Simulator"] == "1",
+                simulator=str(row["Simulator"]).strip().lower()
+                in ("true", "1"),
             )
         )
     league = League(

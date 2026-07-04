@@ -496,7 +496,9 @@ async def get_players(league_id: ObjectId, draftable_only: bool = True):
 
     # Before returning the data, filter out drafted players if requested
     if draftable_only:
-        return Players(players=[player for player in players if not player.drafted])
+        return Players(
+            players=[p for p in players.players if not p.drafted]
+        )
     else:
         return players
 
@@ -520,7 +522,7 @@ async def get_player(league_id: ObjectId, player_name: str):
     Get a player by their name
     """
     league = await get_a_league_by_id(league_id)
-    player = [player for player in league.players if player.name == player_name]
+    player = [p for p in league.players.players if p.name == player_name]
     if not player:
         raise HTTPException(status_code=404, detail="Player not found")
     return player[0]

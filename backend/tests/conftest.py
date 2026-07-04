@@ -23,7 +23,10 @@ sys.path.insert(0, str(BACKEND_DIR))
 import pytest
 from mongomock_motor import AsyncMongoMockClient
 
-DATA_DIR = BACKEND_DIR / "data"
+# The sample CSVs live in frontend/public (the single copy, served as
+# downloadable samples by the setup page); the tests double as
+# validation that those shipped samples actually work end to end
+DATA_DIR = BACKEND_DIR.parent / "frontend" / "public"
 
 
 class _NoopSession:

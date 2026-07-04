@@ -441,6 +441,9 @@ async def delete_league(league_id: ObjectId):
     Delete a league by its ID
     """
     league = await get_a_league_by_id(league_id)
+    drafts = await engine.find(Draft, Draft.league == league.id)
+    for draft in drafts:
+        await engine.delete(draft)
     await engine.delete(league)
     return Response(status_code=204)
 

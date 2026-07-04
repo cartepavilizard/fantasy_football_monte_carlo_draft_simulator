@@ -296,8 +296,7 @@ def monte_carlo_draft(
                 if player.drafted == False
             ]
             if len(possible_players) == 0:
-                results[position].append(0)  # No players left
-                continue
+                continue  # No players left; average the samples we have
             best_player = possible_players[0]
             league_copy = league.model_copy(deep=True)
             draft_player(best_player.name, league_copy)
@@ -314,7 +313,10 @@ def monte_carlo_draft(
 
     # Turn the arrays into averages
     for position in results.keys():
-        results[position] = round(sum(results[position]) / len(results[position]), 2)
+        samples = results[position]
+        results[position] = (
+            round(sum(samples) / len(samples), 2) if samples else 0.0
+        )
     results["iterations"] = i
     return MonteCarloSimulationResult(**results)
 

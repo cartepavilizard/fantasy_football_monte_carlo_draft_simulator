@@ -332,6 +332,15 @@ async def create_league(
     """
     Read data from a POSTed CSV file and create a league
     """
+    position_sizes = PositionSizes(
+        qb=qb_size,
+        rb=rb_size,
+        wr=wr_size,
+        te=te_size,
+        flex=flex_size,
+        dst=dst_size,
+        k=k_size,
+    )
     data = csv.DictReader((await file.read()).decode("utf-8-sig").splitlines())
     teams = []
     for row in data:
@@ -340,6 +349,7 @@ async def create_league(
                 name=row["Name"],
                 draft_order=row["Order"],
                 owner=row["Owner"],
+                position_sizes=position_sizes,
                 simulator=row["Simulator"] == "True"
                 or row["Simulator"] == 1
                 or row["Simulator"] == "1",
@@ -351,15 +361,7 @@ async def create_league(
         name=name,
         round_size=round_size,
         roster_size=roster_size,
-        position_sizes=PositionSizes(
-            qb=qb_size,
-            rb=rb_size,
-            wr=wr_size,
-            te=te_size,
-            flex=flex_size,
-            dst=dst_size,
-            k=k_size,
-        ),
+        position_sizes=position_sizes,
         created=datetime.now(),
         copy_for_draft=False,
         current_draft_turn=0,

@@ -13,16 +13,12 @@ from sklearn.base import RegressorMixin
 from typing import List
 
 
-# Load the position sizes, determined by environment variables
-ps = PositionSizes()
-
-
 """
 TEAM HELPER FUNCTION
 """
 
 
-def fill_starters(roster):
+def fill_starters(roster, sizes: PositionSizes):
     """
     Use projected points to fill the roster with the best players
     (used twice within the Team model, so it's a helper function)
@@ -31,7 +27,7 @@ def fill_starters(roster):
     output = {}
 
     # Perform the iteration for each position
-    for position, size in ps.model_dump().items():
+    for position, size in sizes.model_dump().items():
         players = [player for player in roster if player["position"] == position]
         if players:
 
@@ -55,10 +51,10 @@ def fill_starters(roster):
         flex_players,
         key=lambda x: x["points"][str(DRAFT_YEAR)]["projected_points"],
         reverse=True,
-    )[: ps.flex]
+    )[: sizes.flex]
 
     # Combine all positions for starters
-    positions = ps.model_dump().keys() | {"flex"}
+    positions = sizes.model_dump().keys() | {"flex"}
     output["starters"] = [
         player
         for position in positions
@@ -90,6 +86,9 @@ class Team(EmbeddedModel):
     simulator: bool = False
     draft_order: int
 
+    # Starting-lineup sizes for the team's league (defaults to env-var sizes)
+    position_sizes: PositionSizes = PositionSizes()
+
     # Roster is a list of players, while starters are the best for a position
     roster: List[Player] = []
     starters: List[Player] = []
@@ -110,7 +109,10 @@ class Team(EmbeddedModel):
         """
         if "roster" not in data or not data["roster"]:
             return data  # If roster is not in data, just return the data - there's nothing to do
-        starters = fill_starters(data["roster"])
+        sizes = data.get("position_sizes") or PositionSizes()
+        if isinstance(sizes, dict):
+            sizes = PositionSizes(**sizes)
+        starters = fill_starters(data["roster"], sizes)
         for position, players in starters.items():
             data[position] = players
         data["starters"] = starters.get("starters", [])
@@ -130,9 +132,10 @@ class Team(EmbeddedModel):
 
         # For each position, check if the starters are filled
         starting_positions = ["qb", "rb", "wr", "te", "dst", "k"]
+        sizes = self.position_sizes.model_dump()
         starting_filled = 0
         for position in starting_positions:
-            if len(getattr(self, position)) == ps.model_dump()[position]:
+            if len(getattr(self, position)) == sizes[position]:
                 starting_filled += 1
 
         # If all of the important positions are filled, return the position weights
@@ -141,7 +144,7 @@ class Team(EmbeddedModel):
 
         # Otherwise, adjust the weights based on the number of important positions filled
         for position in starting_positions:
-            if len(getattr(self, position)) == ps.model_dump()[position]:
+            if len(getattr(self, position)) == sizes[position]:
                 position_weights[position] = 0
 
         # Recalculate the total weight and return the position weights
@@ -150,7 +153,7 @@ class Team(EmbeddedModel):
             open_positions = [
                 p
                 for p in starting_positions
-                if len(getattr(self, p)) < ps.model_dump()[p]
+                if len(getattr(self, p)) < sizes[p]
             ]
             return {p: 1 / len(open_positions) for p in open_positions}
         return {
@@ -211,7 +214,9 @@ class Team(EmbeddedModel):
             )
             new_player = Player(**player_data)
             roster_copy[i] = new_player
-        starters = fill_starters([x.model_dump() for x in roster_copy])["starters"]
+        starters = fill_starters(
+            [x.model_dump() for x in roster_copy], self.position_sizes
+        )["starters"]
         return sum(
             [player["points"][str(year)]["projected_points"] for player in starters]
         )

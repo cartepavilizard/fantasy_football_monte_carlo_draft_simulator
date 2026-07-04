@@ -293,7 +293,8 @@ class League(Model):
         # For the number of rounds, create the draft order as a list
         data["draft_order"] = []
         team_indices = [data["teams"].index(team) for team in data["teams"]]
-        for i in range(ROUND_SIZE):
+        rounds = int(data.get("round_size", ROUND_SIZE))
+        for i in range(rounds):
             if data["snake_draft"]:
                 if i % 2 == 0:
                     data["draft_order"].extend(team_indices)

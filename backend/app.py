@@ -479,6 +479,18 @@ async def add_players_to_league(
     data = read_csv_upload(
         await file.read(), {"Season", "Player", "Pos", "Team", "Projected FFP"}
     )
+
+    # Everything downstream reads points[str(DRAFT_YEAR)], so reject data
+    # for the wrong season now instead of 500ing on later requests
+    seasons = {str(row["Season"]) for row in data}
+    if str(DRAFT_YEAR) not in seasons:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Players file seasons {sorted(seasons)} do not include "
+                f"the configured DRAFT_YEAR ({DRAFT_YEAR})"
+            ),
+        )
     players = []
     for row in data:
         players.append(

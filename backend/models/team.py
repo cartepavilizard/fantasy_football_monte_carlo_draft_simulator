@@ -8,7 +8,8 @@ import datetime
 from .player import Player, Players
 from .position import PositionMaxPoints, PositionSizes, PositionTierDistributions
 from odmantic import EmbeddedModel, Model, ObjectId, Reference
-from pydantic import BaseModel, ConfigDict, model_validator
+from odmantic import Field as ODField
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sklearn.base import RegressorMixin
 from typing import List
 
@@ -237,7 +238,7 @@ class LeagueSimple(BaseModel):
     to return to the user in the API, not model in the database
     """
 
-    created: datetime.datetime = datetime.datetime.now()
+    created: datetime.datetime = Field(default_factory=datetime.datetime.now)
     name: str = ""
     ready_for_draft: bool
     copy_for_draft: bool
@@ -249,7 +250,7 @@ class League(Model):
     All teams in the league, with draft order, based on settings
     """
 
-    created: datetime.datetime = datetime.datetime.now()
+    created: datetime.datetime = ODField(default_factory=datetime.datetime.now)
     name: str = ""
     roster_size: int = 14
     position_sizes: PositionSizes = PositionSizes()
@@ -365,7 +366,7 @@ class DraftSimple(BaseModel):
     to return to the user in the API, not model in the database
     """
 
-    created: datetime.datetime = datetime.datetime.now()
+    created: datetime.datetime = Field(default_factory=datetime.datetime.now)
     id: ObjectId
 
 
@@ -376,7 +377,7 @@ class Draft(Model):
     """
 
     league: League = Reference()
-    created: datetime.datetime = datetime.datetime.now()
+    created: datetime.datetime = ODField(default_factory=datetime.datetime.now)
 
 
 class MonteCarloSimulationResult(BaseModel):

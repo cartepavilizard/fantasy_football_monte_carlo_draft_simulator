@@ -255,7 +255,6 @@ class League(Model):
     roster_size: int = 14
     position_sizes: PositionSizes = PositionSizes()
     round_size: int = 14
-    snake_draft: bool = True
     ready_for_draft: bool = False
     copy_for_draft: bool = (
         False  # If a league is a copy, it can go in drafts and is editable

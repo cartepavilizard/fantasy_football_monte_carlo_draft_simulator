@@ -165,9 +165,10 @@ def fit_logistic_regression_model(
         x = [[int(x)] for x in logistic_regression_variables.x]
         y = logistic_regression_variables.y
         draft_pick_model.fit(x, y)
-    except:
+    except (ValueError, TypeError, KeyError) as exc:
         raise HTTPException(
-            status_code=500, detail="Failed to train logistic regression model"
+            status_code=400,
+            detail=f"Failed to train logistic regression model: {exc}",
         )
     return draft_pick_model
 

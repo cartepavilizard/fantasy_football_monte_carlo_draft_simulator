@@ -15,9 +15,12 @@ services:
     volumes:
       - mongodb_data:/data/db
   nextjs-app:
-    build: 
+    build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        # URL the user's browser uses to reach the backend
+        - NEXT_PUBLIC_API_URL=http://localhost:8000
     container_name: nextjs-app
     restart: always
     ports:

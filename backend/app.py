@@ -490,6 +490,17 @@ async def add_players_to_league(
                 f"the configured DRAFT_YEAR ({DRAFT_YEAR})"
             ),
         )
+
+    # Players are looked up by name everywhere, so duplicates would
+    # silently collapse into one draftable player
+    names = [row["Player"] for row in data]
+    duplicates = sorted({n for n in names if names.count(n) > 1})
+    if duplicates:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Duplicate player names in CSV: {duplicates} "
+            "(disambiguate, e.g. append team abbreviation)",
+        )
     players = []
     for row in data:
         players.append(

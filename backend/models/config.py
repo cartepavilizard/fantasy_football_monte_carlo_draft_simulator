@@ -30,3 +30,21 @@ DRAFT_YEAR = int(
 )  # Default current year
 ROUND_SIZE = int(os.getenv("ROUND_SIZE", 14))
 SNAKE_DRAFT = os.getenv("SNAKE_DRAFT", "True").lower() == "true"
+
+# Data source credentials and settings (Phase 0)
+# Credentials live in env/.env ONLY — never stored in Mongo
+ESPN_S2 = os.getenv("ESPN_S2")  # cookie from a logged-in espn.com session
+ESPN_SWID = os.getenv("ESPN_SWID")  # matching SWID cookie, braces included
+ESPN_LEAGUE_IDS = [
+    int(league_id)
+    for league_id in os.getenv("ESPN_LEAGUE_IDS", "").replace(" ", "").split(",")
+    if league_id
+]  # comma-separated ids of the leagues to ingest history from
+YAHOO_CLIENT_ID = os.getenv("YAHOO_CLIENT_ID")
+YAHOO_CLIENT_SECRET = os.getenv("YAHOO_CLIENT_SECRET")
+YAHOO_REFRESH_TOKEN = os.getenv("YAHOO_REFRESH_TOKEN")
+FANTASYPROS_API_KEY = os.getenv("FANTASYPROS_API_KEY")  # optional partner key
+DATA_SOURCE_CACHE_DIR = os.getenv("DATA_SOURCE_CACHE_DIR", ".data_source_cache")
+DATA_SOURCE_CACHE_TTL_SECONDS = float(
+    os.getenv("DATA_SOURCE_CACHE_TTL_SECONDS", 6 * 60 * 60)
+)

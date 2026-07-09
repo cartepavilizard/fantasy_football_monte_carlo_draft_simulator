@@ -74,3 +74,6 @@ node_modules/
 # Ignore downloaded files and personal settings that are not a part of the public project
 downloads/
 personal_league_teams.csv
+
+# Raw-response cache for external data sources
+.data_source_cache/

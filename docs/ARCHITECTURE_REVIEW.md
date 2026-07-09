@@ -177,7 +177,7 @@ The request assumed "most will need Playwright scraping rather than clean API ac
 | Source | Access path | Auth | Anti-bot risk | Playwright needed? |
 |---|---|---|---|---|
 | **ESPN (league history + ADP/rankings)** | Unofficial JSON API: `lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/{yr}/segments/0/leagues/{id}?view=mDraftDetail` (2018+) and `.../leagueHistory/{id}?seasonId={yr}` (pre-2018). Player ADP/ownership via `kona_player_info` view + `X-Fantasy-Filter` header. | Private leagues need `espn_s2` + `SWID` cookies (copy from a logged-in browser; you have commissioner access, so this is trivial). **As of Aug 2025 ESPN also requires these cookies for historical data that used to be public.** | Low — it's the same JSON API their own frontend uses. Undocumented, so endpoints/shapes can shift (base URL last changed ~April 2024). | **No** |
-| **Sleeper (crowd ADP)** | ~~Official, documented, read-only REST API (`api.sleeper.app`), no key required.~~ **Removed from scope 2026-07-09 — see Addendum A §A.1.** | — | — | — |
+| **Sleeper (crowd ADP)** | Official, documented, read-only REST API (`api.sleeper.app`), no key required. ADP fields (`adp_*` by format) live on the projections/players endpoints; some ADP-specific routes are undocumented but stable and widely used. Ranking-blend source only — owner profiling is ESPN-only (Addendum A §A.1). | None | Very low. Their docs ask ≤1000 calls/min; the full player dump is ~5MB and should be fetched at most daily. | **No** |
 | **Fantasy Football Calculator (crowd ADP)** | Official, documented, free REST API: `fantasyfootballcalculator.com/api/v1/adp/{format}?teams=12&year=YYYY`. Explicitly free for personal use, attribution requested. **Supports past years — this is our best source of *historical* ADP for the reach-frequency features.** | None | Very low | **No** |
 | **FantasyPros (expert consensus)** | Two options: (a) official API (`api.fantasypros.com`) — requires requesting a partner/API key; (b) the public rankings pages embed the full consensus payload as a JSON blob (`ecrData`) in the page source, fetchable with plain HTTP + a browser-like User-Agent. | (a) API key; (b) none (premium-only views need a session cookie) | **Moderate — the main one to watch.** They sit behind Cloudflare; plain-`requests` fetches have historically worked with sane headers and low frequency, but this is the source most likely to need Playwright (or `curl_cffi`-style TLS impersonation) if they tighten bot management. Design the adapter so its transport is swappable. | Maybe (fallback) |
 | **Yahoo (rankings/ADP)** | Official Fantasy Sports API, OAuth2. Well documented; the hurdle is one-time app registration + token refresh plumbing, not scraping. | OAuth2 app + refresh token | Low via the API. **Do not scrape Yahoo pages** — aggressive bot detection and login walls make it the worst-value scraping target here. | **No** (use OAuth API) |
@@ -285,12 +285,12 @@ no user-visible change.
 
 ### Phase 1 — Ranking aggregation, API-first sources
 
-> Amended 2026-07-09 (Addendum A): Sleeper dropped from scope; the ESPN adapter's
-> league-scoped transport is the `espn-api` library, with one direct view call for
-> ADP/rankings.
+> Amended 2026-07-09 (Addendum A): the ESPN adapter's league-scoped transport is
+> the `espn-api` library, with one direct view call for ADP/rankings. Sleeper is a
+> ranking-blend source only, never an owner-profiling source.
 
-- Adapters: **FantasyFootballCalculator** (incl. `year=` historical ADP) and
-  **ESPN** rankings/ADP. Both are clean JSON — no scraping risk, fast win.
+- Adapters: **Sleeper**, **FantasyFootballCalculator** (incl. `year=` historical
+  ADP), **ESPN** rankings/ADP. All are clean JSON — no scraping risk, fast win.
 - Normalization: per source, convert to a common schema
   `(canonical_player, source, rank, position_rank, tier, adp, projection, fetched_at)`;
   blend via configurable weighted average over positional value (z-score within
@@ -420,7 +420,7 @@ file-drop; one-click full refresh.
 
 - ESPN v3 fantasy API endpoints, views, and cookie auth: [Steven Morse — Using ESPN's Fantasy API (v3)](https://stmorse.github.io/journal/espn-fantasy-v3.html), [ffscrapr ESPN endpoint docs](https://ffscrapr.ffverse.com/articles/espn_getendpoint.html), [ESPN draft API walkthrough](https://jman4190.medium.com/how-to-use-python-with-the-espn-fantasy-draft-api-ecde38621b1b), [fflr (2025 cookie-requirement change)](https://k5cents.github.io/fflr/)
 - FantasyFootballCalculator ADP REST API: [official docs](https://help.fantasyfootballcalculator.com/article/42-adp-rest-api)
-- Sleeper API: [docs.sleeper.com](https://docs.sleeper.com/) *(retained for reference only; out of scope per Addendum A)*
+- Sleeper API: [docs.sleeper.com](https://docs.sleeper.com/)
 
 ---
 
@@ -431,11 +431,12 @@ file-drop; one-click full refresh.
 1. **Owner tendency profiling pulls exclusively from ESPN historical draft data.**
    All three of the user's leagues are on ESPN; no other platform contributes to
    owner profiles. (The original plan already assumed this; now explicit.)
-2. **Sleeper is removed as a data source for the project entirely**, including the
-   ranking-aggregation blend. The blend sources are now: Fantasy Footballers UDK,
-   FantasyPros, ESPN, Yahoo, and FantasyFootballCalculator. Should Sleeper ADP be
-   wanted later, re-adding it is a self-contained adapter against an open,
-   documented, keyless API — a small, isolated task that nothing else depends on.
+2. **Sleeper stays in the ranking-aggregation blend as a crowd-ADP normalization
+   source** (briefly removed earlier on 2026-07-09, reinstated the same day on user
+   confirmation). It contributes **only** to the blended rankings/ADP — it plays no
+   part in owner tendency profiling, which is ESPN-exclusive per item 1. The blend
+   sources are: Fantasy Footballers UDK, FantasyPros, ESPN, Yahoo,
+   FantasyFootballCalculator, and Sleeper.
 3. Confirmed by the user's own research: no existing wrapper libraries or MCP
    servers exist for FantasyPros, Yahoo, or FFC — those adapters proceed as direct
    API / fallback-scrape integrations exactly as planned in Part 2.
@@ -507,9 +508,9 @@ features still depend on Phase 1's FFC historical ADP). Deltas only:
 - **Phase 0:** add `espn-api==0.46.0` (runtime dep) alongside `httpx`; the ESPN
   credentials plumbing now feeds the library's constructor instead of raw cookie
   headers.
-- **Phase 1:** shrinks — sources are **FFC + ESPN** (Sleeper adapter deleted from
-  scope). The ESPN adapter is a hybrid: `espn-api` for anything league-scoped, one
-  direct `kona_player_info` call for ADP/rankings.
+- **Phase 1:** sources are **Sleeper + FFC + ESPN**, as originally planned. The
+  ESPN adapter is a hybrid: `espn-api` for anything league-scoped, one direct
+  `kona_player_info` call for ADP/rankings. The Sleeper adapter is blend-only.
 - **Phase 2:** unchanged (FantasyPros, Yahoo, UDK — confirmed no wrapper libraries
   exist; direct integrations as planned).
 - **Phase 3:** shrinks — the ingester's HTTP/auth/pagination layer is replaced by

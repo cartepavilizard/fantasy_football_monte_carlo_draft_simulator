@@ -99,6 +99,7 @@ export default function DraftIdPage({ params }: { params: { id: string } }) {
   );
   const [bestPick, setBestPick] = useState("");
   const [searchFilter, setSearchFilter] = useState("");
+  const [simulationError, setSimulationError] = useState(false);
 
   // Draft a player with a POST request to '/draft/:id/pick'
   const handleDraftPlayer = async (name: string) => {
@@ -112,7 +113,7 @@ export default function DraftIdPage({ params }: { params: { id: string } }) {
       draft.league.draft_order.length > 0 &&
       draft.league.teams[draft.league.draft_order[0]].simulator
     ) {
-      if (monteCarloResults.iterations === 0) {
+      if (monteCarloResults.iterations === 0 && !simulationError) {
         runMonteCarlo({ id: draft.id })
           .unwrap()
           .then((data) => {
@@ -137,13 +138,18 @@ export default function DraftIdPage({ params }: { params: { id: string } }) {
                 `${bestPlayer?.name} (${bestPosition.toLocaleUpperCase()})`,
               );
             }
+          })
+          .catch((error) => {
+            console.error("Monte Carlo simulation failed:", error);
+            setSimulationError(true);
           });
       }
     } else {
       setMonteCarloResults(emptyMonteCarloResults);
       setBestPick("");
+      setSimulationError(false);
     }
-  }, [draft.league, monteCarloResults]);
+  }, [draft.league, monteCarloResults, simulationError]);
 
   // Return all data in the DraftIdContext.Provider
   return (
@@ -188,7 +194,22 @@ export default function DraftIdPage({ params }: { params: { id: string } }) {
             <div className="flex flex-col justify-center gap-2 border-medium rounded-large p-3 border-default">
               <h3 className="w-full text-xl">Monte Carlo Results</h3>
               {draft.league.teams[draft.league.draft_order[0]].simulator &&
-              monteCarloResults.iterations === 0 ? (
+              simulationError ? (
+                <div className="flex items-center justify-between w-full">
+                  <p className="font-bold text-danger">
+                    Simulation failed. Please try again.
+                  </p>
+                  <Button
+                    color="danger"
+                    size="sm"
+                    variant="flat"
+                    onClick={() => setSimulationError(false)}
+                  >
+                    Retry
+                  </Button>
+                </div>
+              ) : draft.league.teams[draft.league.draft_order[0]].simulator &&
+                monteCarloResults.iterations === 0 ? (
                 <p className="font-bold w-full">
                   <span className="flex items-center">
                     <Spinner size="sm" />
@@ -276,7 +297,8 @@ export default function DraftIdPage({ params }: { params: { id: string } }) {
                               draft.league.draft_order.length > 0 &&
                               draft.league.teams[draft.league.draft_order[0]]
                                 .simulator &&
-                              monteCarloResults.iterations === 0
+                              monteCarloResults.iterations === 0 &&
+                              !simulationError
                             }
                             onClick={() => handleDraftPlayer(player.name)}
                           >

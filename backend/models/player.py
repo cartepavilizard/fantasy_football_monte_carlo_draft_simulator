@@ -82,7 +82,7 @@ class Player(EmbeddedModel):
         """
         Return a random point projection for the player, if a distribution exists
         """
-        output = {"projected_points": self.points[str(year)].projected_points}
+        output = {"projected_points": round(self.points[str(year)].projected_points)}
 
         # If the tier distribution is not available (DST & K), return the projected points
         tier_distribution = distributions.model_dump().get(self.position_tier, None)

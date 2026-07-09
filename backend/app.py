@@ -2,6 +2,8 @@
 """
 MONTE CARLO FANTASY FOOTBALL DRAFT SIMULATOR BACKEND
 """
+import asyncio
+from concurrent.futures import ProcessPoolExecutor
 import csv
 from datetime import datetime
 from fastapi import FastAPI, File, HTTPException, Response, UploadFile
@@ -15,7 +17,7 @@ from starlette.middleware.cors import CORSMiddleware
 import time
 from typing import List
 
-from models.config import DRAFT_YEAR, LOCAL, ROUND_SIZE, SNAKE_DRAFT
+from models.config import DRAFT_YEAR, LOCAL, ROSTER_SIZE, ROUND_SIZE, SNAKE_DRAFT
 from models.player import Player, Players, PlayerPoints
 from models.position import PositionMaxPoints, PositionSizes, PositionTierDistributions
 from models.team import (
@@ -68,6 +70,10 @@ engine = AIOEngine(
     database="fantasy-football",
     client=client,
 )
+
+# Monte Carlo simulations are CPU-bound; run them in a separate process so
+# they don't hold the GIL and starve other requests for their ~30s duration
+process_pool = ProcessPoolExecutor(max_workers=2)
 
 
 # Include origins for CORS
@@ -362,7 +368,7 @@ async def create_league(
     file: UploadFile = File(...),
     name: str = "Fantasy Football League",
     round_size: int = ROUND_SIZE,
-    roster_size: int = 14,
+    roster_size: int = ROSTER_SIZE,
     snake_draft: bool = SNAKE_DRAFT,
     qb_size: int = 1,
     rb_size: int = 2,
@@ -693,6 +699,21 @@ async def add_historical_draft_data_to_league(
         x.append(row["Pick"])
         y.append(row["Pos"])
     league.logistic_regression_variables = LogisticRegressionVariables(x=x, y=y)
+
+    # Sanity check: warn if the historical draft's pick numbers don't roughly
+    # match this league's round_size/team count, since a silent mismatch here
+    # means the simulator is tuned to a differently-shaped draft than yours
+    expected_picks_per_draft = league.round_size * len(league.teams)
+    max_pick = max((int(pick) for pick in x), default=0)
+    if expected_picks_per_draft and max_pick > expected_picks_per_draft:
+        print(
+            f"WARNING: historical_draft upload for league '{league.name}' has a "
+            f"max pick of {max_pick}, but this league is configured for only "
+            f"{expected_picks_per_draft} picks per draft ({league.round_size} rounds x "
+            f"{len(league.teams)} teams). Check round_size/roster_size in "
+            f"backend/models/config.py against your actual league settings."
+        )
+
     await engine.save(league)
     return league
 
@@ -798,7 +819,8 @@ async def run_monte_carlo_simulation(draft_id: ObjectId):
     draft = await get_a_draft_by_id(draft_id)
     if not draft.league.draft_order:
         raise HTTPException(status_code=400, detail="Draft is complete")
-    return await run_in_threadpool(monte_carlo_draft, draft.league)
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(process_pool, monte_carlo_draft, draft.league)
 
 
 # Get the results of a draft by running each team's randomized points 1000x times

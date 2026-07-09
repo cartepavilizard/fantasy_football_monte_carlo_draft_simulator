@@ -28,27 +28,49 @@ export const leagueApi = createApi({
     }),
 
     // To create a league, we need to send a POST request to '/league'
-    // with all of the teams data, which is required
-    createLeague: builder.mutation<LeagueSimple, { name: string; teams: File }>(
+    // with all of the teams data, which is required. Settings are optional;
+    // any left unset fall back to the backend's configured defaults.
+    createLeague: builder.mutation<
+      LeagueSimple,
       {
-        query: ({ name, teams }) => {
-          var bodyFormData = new FormData();
+        name: string;
+        teams: File;
+        round_size?: number;
+        roster_size?: number;
+        snake_draft?: boolean;
+        qb_size?: number;
+        rb_size?: number;
+        wr_size?: number;
+        te_size?: number;
+        flex_size?: number;
+        dst_size?: number;
+        k_size?: number;
+      }
+    >({
+      query: ({ name, teams, ...settings }) => {
+        var bodyFormData = new FormData();
 
-          bodyFormData.append("contentType", teams.type);
-          bodyFormData.append("file", teams);
+        bodyFormData.append("contentType", teams.type);
+        bodyFormData.append("file", teams);
 
-          return {
-            url: leagueUrl,
-            method: "POST",
-            params: {
-              name,
-            },
-            body: bodyFormData,
-          };
-        },
-        invalidatesTags: ["League"],
+        // Omit unset settings so the backend's own defaults apply
+        const params: Record<string, string | number | boolean> = { name };
+
+        Object.entries(settings).forEach(([key, value]) => {
+          if (value !== undefined) {
+            params[key] = value;
+          }
+        });
+
+        return {
+          url: leagueUrl,
+          method: "POST",
+          params,
+          body: bodyFormData,
+        };
       },
-    ),
+      invalidatesTags: ["League"],
+    }),
 
     // Players are added from a file POSTed to '/league/:id/player'
     addPlayers: builder.mutation<void, { id: string; players: File }>({

@@ -20,7 +20,6 @@ TE_SIZE = int(os.getenv("TE_SIZE", 1))
 FLEX_SIZE = int(os.getenv("FLEX_SIZE", 1))
 DST_SIZE = int(os.getenv("DST_SIZE", 1))
 K_SIZE = int(os.getenv("K_SIZE", 1))
-STARTERS_SIZE = QB_SIZE + RB_SIZE + WR_SIZE + TE_SIZE + FLEX_SIZE + DST_SIZE + K_SIZE
 
 # Randomization settings
 MAX_RANDOM_ADJUSTMENT = float(os.getenv("MAX_RANDOM_ADJUSTMENT", 0.1))

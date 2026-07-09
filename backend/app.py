@@ -8,7 +8,7 @@ import csv
 from datetime import datetime
 from fastapi import FastAPI, File, HTTPException, Response, UploadFile
 from motor.motor_asyncio import AsyncIOMotorClient
-from odmantic import AIOEngine, ObjectId
+from odmantic import AIOEngine, ObjectId, query
 import random
 from sklearn.base import RegressorMixin
 from sklearn.linear_model import LogisticRegression
@@ -17,9 +17,18 @@ from starlette.middleware.cors import CORSMiddleware
 import time
 from typing import List
 
-from models.config import DRAFT_YEAR, LOCAL, ROSTER_SIZE, ROUND_SIZE, SNAKE_DRAFT
+from data_sources import service as ranking_service
+from models.config import (
+    DRAFT_YEAR,
+    LOCAL,
+    ROSTER_SIZE,
+    ROUND_SIZE,
+    SCORING_FORMAT,
+    SNAKE_DRAFT,
+)
 from models.player import Player, Players, PlayerPoints
 from models.position import PositionMaxPoints, PositionSizes, PositionTierDistributions
+from models.sources import BlendedRanking
 from models.team import (
     Draft,
     DraftSimple,
@@ -52,6 +61,10 @@ tags_metadata = [
     {
         "name": "draft",
         "description": "Drafts are copies of leagues, which can simulate a round-by-round draft.",
+    },
+    {
+        "name": "rankings",
+        "description": "Automated ranking aggregation: fetch external sources, blend them, and sync the blend into a league's players.",
     },
 ]
 
@@ -138,10 +151,11 @@ def create_max_points(
     max_points = {}
     for position in ["qb", "rb", "wr", "te", "dst", "k"]:
         max_points[position] = max(
-            [
+            (
                 player.points[draft_year].projected_points
                 for player in players.__getattribute__(position)
-            ]
+            ),
+            default=0.0,  # a source blend may legitimately lack a position
         )
     return PositionMaxPoints(**max_points)
 
@@ -595,6 +609,124 @@ async def get_player(league_id: ObjectId, player_name: str):
     if not player:
         raise HTTPException(status_code=404, detail="Player not found")
     return player[0]
+
+
+async def get_latest_blend(season: int, scoring_format: str) -> BlendedRanking:
+    """
+    Get the most recently generated blend for a season/format
+    """
+    blend = await engine.find_one(
+        BlendedRanking,
+        (BlendedRanking.season == season)
+        & (BlendedRanking.scoring_format == scoring_format),
+        sort=query.desc(BlendedRanking.generated_at),
+    )
+    if not blend:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No blended rankings for season {season} "
+                f"({scoring_format}); POST /rankings/refresh first"
+            ),
+        )
+    return blend
+
+
+@app.post("/rankings/refresh", tags=["rankings"])
+async def refresh_player_rankings(
+    season: int = DRAFT_YEAR, scoring_format: str = SCORING_FORMAT, sources: str = ""
+):
+    """
+    Fetch all (or a comma-separated subset of) configured ranking sources,
+    store each source's batch, and generate a new blend. Sources fail
+    independently: a broken source is recorded and left out of the blend.
+    """
+    source_list = [name.strip() for name in sources.split(",") if name.strip()]
+    try:
+        return await ranking_service.refresh_rankings(
+            engine, season, scoring_format, sources=source_list or None
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/rankings/blended", response_model=BlendedRanking, tags=["rankings"])
+async def get_blended_rankings(
+    season: int = DRAFT_YEAR, scoring_format: str = SCORING_FORMAT
+):
+    """
+    Get the most recent blended ranking for a season and scoring format
+    """
+    return await get_latest_blend(season, scoring_format)
+
+
+@app.post("/league/{league_id}/player/sync", response_model=League, tags=["player"])
+async def sync_players_from_blended_rankings(
+    league_id: ObjectId, scoring_format: str = SCORING_FORMAT
+):
+    """
+    Materialize the latest blend into the league's draftable players —
+    the no-CSV replacement for POST /league/{league_id}/player. Unlike
+    the upload route this replaces existing players (re-sync friendly);
+    leagues used for live drafting are copies, so replacement is safe.
+    """
+    league = await get_a_league_by_id(league_id)
+    blend = await get_latest_blend(DRAFT_YEAR, scoring_format)
+
+    players = []
+    seen = set()
+    for record in blend.records:  # already sorted best-first
+        if record.position not in ["qb", "rb", "wr", "te", "dst", "k"]:
+            continue
+        # The simulator runs on projected points, so a record no source
+        # projected (e.g. ADP-only deep sleepers) cannot be materialized
+        if record.blended_projection is None:
+            continue
+        if record.canonical_name in seen:
+            continue
+        seen.add(record.canonical_name)
+        players.append(
+            Player(
+                name=record.canonical_name,
+                position=record.position,
+                nfl_team=record.nfl_team or "",
+                drafted=False,
+                points={
+                    str(DRAFT_YEAR): PlayerPoints(
+                        projected_points=record.blended_projection
+                    )
+                },
+                adp=record.adp,
+                consensus_rank=record.consensus_rank,
+                tier=record.tier,
+                source_values=record.source_values,
+            )
+        )
+    if not players:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Latest blend has no records with blended projections; "
+                "refresh with at least one projection-bearing source "
+                "(sleeper, espn)"
+            ),
+        )
+
+    # A pool smaller than the draft would run out of players mid-simulation
+    total_picks = league.round_size * len(league.teams)
+    if len(players) < total_picks:
+        print(
+            f"WARNING: sync for league '{league.name}' materialized only "
+            f"{len(players)} players, but the draft needs {total_picks} picks "
+            f"({league.round_size} rounds x {len(league.teams)} teams). "
+            "Add projection-bearing sources or check the blend."
+        )
+
+    league.players = Players(players=players)
+    league.position_max_points = create_max_points(league.players)
+    league.ready_position_max_points = True
+    await engine.save(league)
+    return league
 
 
 @app.post(

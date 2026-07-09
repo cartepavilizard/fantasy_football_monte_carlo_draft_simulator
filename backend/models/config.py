@@ -4,6 +4,7 @@ ENVIRONMENT CONFIGURATION VALUES FOR ODMANTIC MODELS AND SIMULATION
 """
 import datetime
 from dotenv import load_dotenv
+import json
 import os
 
 load_dotenv()
@@ -48,3 +49,13 @@ DATA_SOURCE_CACHE_DIR = os.getenv("DATA_SOURCE_CACHE_DIR", ".data_source_cache")
 DATA_SOURCE_CACHE_TTL_SECONDS = float(
     os.getenv("DATA_SOURCE_CACHE_TTL_SECONDS", 6 * 60 * 60)
 )
+
+# Ranking aggregation settings (Phase 1)
+SCORING_FORMAT = os.getenv("SCORING_FORMAT", "ppr")  # standard | half_ppr | ppr
+try:
+    # Per-source blend weights, e.g. '{"espn": 1.0, "sleeper": 0.5}'
+    # (sources missing from the map default to weight 1.0)
+    RANKING_BLEND_WEIGHTS = json.loads(os.getenv("RANKING_BLEND_WEIGHTS", "{}"))
+except ValueError:
+    print("WARNING: RANKING_BLEND_WEIGHTS is not valid JSON; using equal weights")
+    RANKING_BLEND_WEIGHTS = {}

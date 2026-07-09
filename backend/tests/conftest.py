@@ -20,8 +20,36 @@ os.environ.setdefault("DRAFT_YEAR", "2024")
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BACKEND_DIR))
 
+import json
+
 import pytest
 from mongomock_motor import AsyncMongoMockClient
+
+from data_sources.transport import TransportResponse
+
+
+class FakeTransport:
+    """Scripted transport for data-source tests: canned payload, counts hits"""
+
+    def __init__(self, status_code=200, payload=None):
+        self.status_code = status_code
+        self.payload = payload if payload is not None else []
+        self.calls = 0
+        self.last_url = None
+        self.last_params = None
+        self.last_headers = None
+
+    async def get(self, url, *, params=None, headers=None):
+        self.calls += 1
+        self.last_url = url
+        self.last_params = params
+        self.last_headers = headers
+        return TransportResponse(
+            status_code=self.status_code, text=json.dumps(self.payload), url=url
+        )
+
+    async def aclose(self):
+        return None
 
 # The sample CSVs live in frontend/public (the single copy, served as
 # downloadable samples by the setup page); the tests double as

@@ -58,6 +58,13 @@ class Player(EmbeddedModel):
     points: Dict[str, PlayerPoints]  # Key is the year of the points
     drafted: bool = False
 
+    # Optional cross-source consensus fields, populated when players are
+    # synced from blended rankings; None/empty on the CSV upload path
+    adp: Union[float, None] = None
+    consensus_rank: Union[float, None] = None
+    tier: Union[int, None] = None
+    source_values: Dict[str, float] = {}
+
     @field_validator("position", "position_tier")
     @classmethod
     def validate_position(cls, value) -> str:

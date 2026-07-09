@@ -5,10 +5,10 @@ caching, batch packaging with name resolution, and the Phase 0 Mongo
 collection models round-tripping through the (mock) engine.
 """
 import asyncio
-import json
 import time
 
 import pytest
+from conftest import FakeTransport
 from mongomock_motor import AsyncMongoMockClient
 from odmantic import AIOEngine
 
@@ -25,24 +25,6 @@ from models.sources import (
     PlayerAlias,
     SourceRankingBatch,
 )
-
-
-class FakeTransport:
-    """Scripted transport that counts hits"""
-
-    def __init__(self, status_code=200, payload=None):
-        self.status_code = status_code
-        self.payload = payload if payload is not None else []
-        self.calls = 0
-
-    async def get(self, url, *, params=None, headers=None):
-        self.calls += 1
-        return TransportResponse(
-            status_code=self.status_code, text=json.dumps(self.payload), url=url
-        )
-
-    async def aclose(self):
-        return None
 
 
 class DummyAdapter(BaseSourceAdapter):

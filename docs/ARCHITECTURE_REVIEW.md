@@ -177,7 +177,7 @@ The request assumed "most will need Playwright scraping rather than clean API ac
 | Source | Access path | Auth | Anti-bot risk | Playwright needed? |
 |---|---|---|---|---|
 | **ESPN (league history + ADP/rankings)** | Unofficial JSON API: `lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/{yr}/segments/0/leagues/{id}?view=mDraftDetail` (2018+) and `.../leagueHistory/{id}?seasonId={yr}` (pre-2018). Player ADP/ownership via `kona_player_info` view + `X-Fantasy-Filter` header. | Private leagues need `espn_s2` + `SWID` cookies (copy from a logged-in browser; you have commissioner access, so this is trivial). **As of Aug 2025 ESPN also requires these cookies for historical data that used to be public.** | Low — it's the same JSON API their own frontend uses. Undocumented, so endpoints/shapes can shift (base URL last changed ~April 2024). | **No** |
-| **Sleeper (crowd ADP)** | Official, documented, read-only REST API (`api.sleeper.app`), no key required. ADP fields (`adp_*` by format) live on the projections/players endpoints; some ADP-specific routes are undocumented but stable and widely used. | None | Very low. Their docs ask ≤1000 calls/min; the full player dump is ~5MB and should be fetched at most daily. | **No** |
+| **Sleeper (crowd ADP)** | ~~Official, documented, read-only REST API (`api.sleeper.app`), no key required.~~ **Removed from scope 2026-07-09 — see Addendum A §A.1.** | — | — | — |
 | **Fantasy Football Calculator (crowd ADP)** | Official, documented, free REST API: `fantasyfootballcalculator.com/api/v1/adp/{format}?teams=12&year=YYYY`. Explicitly free for personal use, attribution requested. **Supports past years — this is our best source of *historical* ADP for the reach-frequency features.** | None | Very low | **No** |
 | **FantasyPros (expert consensus)** | Two options: (a) official API (`api.fantasypros.com`) — requires requesting a partner/API key; (b) the public rankings pages embed the full consensus payload as a JSON blob (`ecrData`) in the page source, fetchable with plain HTTP + a browser-like User-Agent. | (a) API key; (b) none (premium-only views need a session cookie) | **Moderate — the main one to watch.** They sit behind Cloudflare; plain-`requests` fetches have historically worked with sane headers and low frequency, but this is the source most likely to need Playwright (or `curl_cffi`-style TLS impersonation) if they tighten bot management. Design the adapter so its transport is swappable. | Maybe (fallback) |
 | **Yahoo (rankings/ADP)** | Official Fantasy Sports API, OAuth2. Well documented; the hurdle is one-time app registration + token refresh plumbing, not scraping. | OAuth2 app + refresh token | Low via the API. **Do not scrape Yahoo pages** — aggressive bot detection and login walls make it the worst-value scraping target here. | **No** (use OAuth API) |
@@ -193,7 +193,8 @@ be fully automatic, which still eliminates routine manual CSV work — the UDK b
 
 **Net:** only FantasyPros has meaningful anti-bot risk, and only the UDK lacks any
 sanctioned automated path. Playwright should be a per-adapter fallback, not the
-default transport. Plain `httpx` + per-source rate limiting covers 5 of 6 sources.
+default transport. Plain `httpx` + per-source rate limiting covers every automated
+source except FantasyPros' possible fallback.
 
 ### 7. Data-availability caveats for owner profiling
 
@@ -284,8 +285,12 @@ no user-visible change.
 
 ### Phase 1 — Ranking aggregation, API-first sources
 
-- Adapters: **Sleeper**, **FantasyFootballCalculator** (incl. `year=` historical
-  ADP), **ESPN** rankings/ADP. All are clean JSON — no scraping risk, fast win.
+> Amended 2026-07-09 (Addendum A): Sleeper dropped from scope; the ESPN adapter's
+> league-scoped transport is the `espn-api` library, with one direct view call for
+> ADP/rankings.
+
+- Adapters: **FantasyFootballCalculator** (incl. `year=` historical ADP) and
+  **ESPN** rankings/ADP. Both are clean JSON — no scraping risk, fast win.
 - Normalization: per source, convert to a common schema
   `(canonical_player, source, rank, position_rank, tier, adp, projection, fetched_at)`;
   blend via configurable weighted average over positional value (z-score within
@@ -319,6 +324,10 @@ touching a CSV; simulation runs unchanged on the result.
 blend rather than breaking it.
 
 ### Phase 3 — ESPN historical draft ingestion + owner tendency extraction
+
+> Amended 2026-07-09 (Addendum A): the ingester is built on the `espn-api` library
+> rather than a hand-rolled HTTP client; this phase's client-plumbing scope shrinks
+> accordingly. Owner tendency data comes exclusively from ESPN.
 
 - Ingester: for each of the three leagues × available seasons, pull `mDraftDetail`
   (+ `leagueHistory` pre-2018) with commissioner cookies; store normalized
@@ -411,4 +420,111 @@ file-drop; one-click full refresh.
 
 - ESPN v3 fantasy API endpoints, views, and cookie auth: [Steven Morse — Using ESPN's Fantasy API (v3)](https://stmorse.github.io/journal/espn-fantasy-v3.html), [ffscrapr ESPN endpoint docs](https://ffscrapr.ffverse.com/articles/espn_getendpoint.html), [ESPN draft API walkthrough](https://jman4190.medium.com/how-to-use-python-with-the-espn-fantasy-draft-api-ecde38621b1b), [fflr (2025 cookie-requirement change)](https://k5cents.github.io/fflr/)
 - FantasyFootballCalculator ADP REST API: [official docs](https://help.fantasyfootballcalculator.com/article/42-adp-rest-api)
-- Sleeper API: [docs.sleeper.com](https://docs.sleeper.com/)
+- Sleeper API: [docs.sleeper.com](https://docs.sleeper.com/) *(retained for reference only; out of scope per Addendum A)*
+
+---
+
+## Addendum A (2026-07-09) — `espn-api` library evaluation & scope changes
+
+### A.1 Scope changes
+
+1. **Owner tendency profiling pulls exclusively from ESPN historical draft data.**
+   All three of the user's leagues are on ESPN; no other platform contributes to
+   owner profiles. (The original plan already assumed this; now explicit.)
+2. **Sleeper is removed as a data source for the project entirely**, including the
+   ranking-aggregation blend. The blend sources are now: Fantasy Footballers UDK,
+   FantasyPros, ESPN, Yahoo, and FantasyFootballCalculator. Should Sleeper ADP be
+   wanted later, re-adding it is a self-contained adapter against an open,
+   documented, keyless API — a small, isolated task that nothing else depends on.
+3. Confirmed by the user's own research: no existing wrapper libraries or MCP
+   servers exist for FantasyPros, Yahoo, or FFC — those adapters proceed as direct
+   API / fallback-scrape integrations exactly as planned in Part 2.
+
+### A.2 Evaluation: adopt `cwendt94/espn-api` or build a custom ESPN client?
+
+**Verdict: adopt the library** for all *league-scoped* ESPN access (historical
+draft ingestion and, later, live draft polling), wrapped behind the Phase 0 adapter
+interface. Keep one small direct HTTP call for the *league-independent* ESPN
+ADP/rankings feed, which the library does not expose. Details verified against the
+library's source and PyPI metadata (v0.46.0, released 2026-03-23, MIT-licensed,
+actively maintained).
+
+#### What the library covers — verified, not assumed
+
+| Need (from Part 1/2) | Library support | Verified detail |
+|---|---|---|
+| Cookie auth for private leagues | ✅ | `League(league_id, year, espn_s2, swid)` — same cookies we'd wire up by hand |
+| Pick-by-pick draft history | ✅ | `league.draft` → `BasePick(team, playerId, playerName, round_num, round_pick, bid_amount, keeper_status, nominatingTeam)` |
+| Keeper exclusion (Part 1 §8.5) | ✅ | `keeper_status` maps ESPN's `keeper` flag directly |
+| Auction-season detection (Part 1 §8.5) | ✅ | `bid_amount` is populated for auction drafts — nonzero bids ⇒ exclude/segregate the season |
+| Stable owner identity (Part 1 §7) | ✅ | `Team.owners` is populated from league `members` matched by member `id` (the stable GUIDs we planned to key profiles on) |
+| Historical seasons | ✅ with caveat | One `League(year=...)` per season; pre-2018 routed via `leagueHistory` internally. Some methods (`free_agents`, `box_scores`) raise for years < 2019, but the draft fetch is not among them. Per-season completeness must still be recorded at ingest time — the Part 1 §7 caveat stands unchanged. |
+| Live draft polling | ✅ | `refresh_draft(refresh_players=..., refresh_teams=...)` re-pulls draft state on demand — poll-loop friendly, as users report |
+| Drafted-vs-waiver provenance | ✅ | `Player.acquisitionType` distinguishes acquisition method on rosters |
+| ESPN ADP / draft rank for the blend | ❌ | Confirmed from `player.py` source: `Player` exposes `posRank`, `percent_owned`, `percent_started`, projections — **no ADP field**. The blend's ESPN ADP still needs one direct `kona_player_info` view call with an `X-Fantasy-Filter` header inside our ESPN adapter. |
+
+#### Fit against the flagged performance constraints
+
+The League-document weight and Monte Carlo hot-loop constraints (Part 1 §8.3–8.4)
+are **unaffected**, because the library never gets near them:
+
+- The library lives strictly at the **ingestion boundary**. Its `League`/`Pick`
+  objects are transient: the ingester instantiates one per (league, season),
+  normalizes picks into our `historical_picks` collection rows, and discards them.
+  Nothing from `espn-api` is stored in Mongo, embedded in our `League` document, or
+  touched inside `simulate_pick`.
+- Instantiating `League` is eager (it fetches settings/teams/rosters up front —
+  several HTTP calls), which would be wasteful in a request path but is irrelevant
+  in an offline batch: 3 leagues × ≤ ~20 seasons ≈ ≤ 60 instantiations, run once
+  and then only for incremental refresh, behind the same per-source rate limiting
+  every adapter gets.
+
+#### Why the library beats a custom client here
+
+The decisive argument is **churn absorption**. ESPN's API is unofficial and has
+already moved twice recently (base-URL change ~April 2024; cookie requirement for
+historical data added August 2025). A custom client makes those breakages *our*
+silent August incidents; the library's maintainer community has absorbed each one,
+and the release cadence (0.46.0 in March 2026) shows it is still absorbing them.
+We would write less code, get keeper/auction/GUID handling for free, and inherit
+fixes during exactly the weeks (draft season) when we least want to reverse-engineer
+JSON shape changes.
+
+Costs, and their mitigations:
+
+| Risk | Mitigation |
+|---|---|
+| Library abandonment or a breaking release | Pin `espn-api==0.46.0` in `requirements.txt`; it's MIT-licensed (compatible with this repo), so worst case we vendor or fork. The Phase 0 adapter interface means a replacement custom client would be a drop-in — no feature code changes. |
+| Its object model leaking into ours | Prohibited by design: adapters emit our normalized schema only; `espn-api` types never cross the adapter boundary. |
+| No ADP exposure | One direct view call in the same adapter (see table above); trivial and already planned. |
+| Old-season gaps | Same as the custom-client plan — record per-season fetch success; nothing about the library changes historical data availability. |
+
+### A.3 Effect on the phased plan
+
+The phase structure, ordering, and rationale are **unchanged** (reach-vs-ADP
+features still depend on Phase 1's FFC historical ADP). Deltas only:
+
+- **Phase 0:** add `espn-api==0.46.0` (runtime dep) alongside `httpx`; the ESPN
+  credentials plumbing now feeds the library's constructor instead of raw cookie
+  headers.
+- **Phase 1:** shrinks — sources are **FFC + ESPN** (Sleeper adapter deleted from
+  scope). The ESPN adapter is a hybrid: `espn-api` for anything league-scoped, one
+  direct `kona_player_info` call for ADP/rankings.
+- **Phase 2:** unchanged (FantasyPros, Yahoo, UDK — confirmed no wrapper libraries
+  exist; direct integrations as planned).
+- **Phase 3:** shrinks — the ingester's HTTP/auth/pagination layer is replaced by
+  `League(league_id, year, espn_s2, swid)` + `league.draft`; the phase's remaining
+  work is what was always the real work: normalization into `historical_picks`,
+  keeper/auction filtering (now via `keeper_status`/`bid_amount`), owner-GUID alias
+  mapping, and per-season fetch bookkeeping.
+- **Phases 4–5:** unchanged. One new option unlocked but *not scheduled*: a live
+  ESPN draft sync (auto-advancing the draft room as real picks come in) becomes
+  cheap later via `refresh_draft()` polling — worth revisiting after Phase 4 ships.
+
+### A.4 Addendum references
+
+- [cwendt94/espn-api on GitHub](https://github.com/cwendt94/espn-api) and the
+  [Football intro wiki](https://github.com/cwendt94/espn-api/wiki/Football-Intro)
+- [espn-api on PyPI](https://pypi.org/project/espn-api/) (v0.46.0, 2026-03-23, MIT)
+- Field-level claims verified directly against `espn_api/base_league.py`,
+  `espn_api/football/player.py`, and `espn_api/football/team.py` at master.

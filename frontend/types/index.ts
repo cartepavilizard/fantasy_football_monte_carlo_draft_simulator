@@ -69,6 +69,33 @@ export type SuggestedPick = {
   reason: string;
 };
 
+// One row of the homer-check comparison table (A6); mirrors
+// backend/models/homer.py ComparisonPlayer
+export type ComparisonPlayer = {
+  name: string;
+  nfl_team: string;
+  projected_points: number;
+  consensus_rank: number | null;
+  adp: number | null;
+  adp_vs_pick: number | null;
+  tier: number | null;
+  tag: PlayerTag | null;
+};
+
+// Neutral side-by-side comparison of a homer-team (Seahawks) suggested
+// pick vs. the top alternatives at that position (A6); mirrors
+// backend/models/homer.py HomerCheck. No recommendation field, by design.
+export type HomerCheck = {
+  position: string;
+  homer_team: string;
+  pick_number: number | null;
+  suggested: ComparisonPlayer;
+  alternatives: ComparisonPlayer[];
+  projection_gap: number;
+  market_gap: number | null;
+  note: string;
+};
+
 export type MonteCarloResults = {
   qb: number;
   rb: number;
@@ -78,6 +105,9 @@ export type MonteCarloResults = {
   k: number;
   iterations: number;
   suggested: Record<string, SuggestedPick>;
+  // A6: present only for positions whose suggested pick is a homer-team
+  // (Seahawks) player
+  homer_checks: Record<string, HomerCheck>;
 };
 
 // Draft results are just an object of each team name with a number (score) as value

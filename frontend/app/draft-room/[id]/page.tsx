@@ -33,6 +33,7 @@ import { useLazyGetScarcityQuery } from "@/api/services/scarcity";
 import { title, subtitle } from "@/components/primitives";
 import {
   Draft,
+  HomerCheck,
   League,
   MonteCarloResults,
   Player,
@@ -255,6 +256,59 @@ function ScarcityPositionCard({
   );
 }
 
+// A6: neutral value comparison for a homer-team (Seahawks) suggested
+// pick vs. the top alternatives at that position. A subtle badge that
+// expands into one table; deliberately no red/green weighting on the
+// gaps and no recommendation copy beyond the backend's factual `note`.
+function HomerCheckPanel({ check }: { check: HomerCheck }) {
+  const [expanded, setExpanded] = useState(false);
+  const rows = [check.suggested, ...check.alternatives];
+
+  return (
+    <div className="mt-1">
+      <button
+        className="flex items-center gap-1 text-xs font-bold px-1.5 py-0.5 rounded-full bg-[#69BE28]/15 text-[#69BE28] border border-[#69BE28]/40 w-fit"
+        type="button"
+        onClick={() => setExpanded(!expanded)}
+      >
+        Homer Check
+      </button>
+      {expanded && (
+        <div className="mt-2 overflow-x-auto">
+          <table className="text-xs w-full text-left border-collapse">
+            <thead>
+              <tr className="text-default-500">
+                <th className="pr-2 py-1 font-normal">Player</th>
+                <th className="pr-2 py-1 font-normal">Proj</th>
+                <th className="pr-2 py-1 font-normal">Rank</th>
+                <th className="pr-2 py-1 font-normal">ADP vs. Pick</th>
+                <th className="pr-2 py-1 font-normal">Tier</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.name} className="border-t border-default-200">
+                  <td className="pr-2 py-1">
+                    <span className="flex items-center gap-1 font-bold">
+                      <TagBadge tag={row.tag} />
+                      {row.name}
+                    </span>
+                  </td>
+                  <td className="pr-2 py-1">{row.projected_points.toFixed(1)}</td>
+                  <td className="pr-2 py-1">{row.consensus_rank ?? "—"}</td>
+                  <td className="pr-2 py-1">{row.adp_vs_pick ?? "—"}</td>
+                  <td className="pr-2 py-1">{row.tier ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="text-xs italic text-default-500 mt-1">{check.note}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const emptyLeague: League = {
   id: "",
   name: "",
@@ -281,6 +335,7 @@ const emptyMonteCarloResults: MonteCarloResults = {
   k: 0,
   iterations: 0,
   suggested: {},
+  homer_checks: {},
 };
 
 type DraftIdContextType = {
@@ -382,9 +437,10 @@ export default function DraftIdPage({ params }: { params: { id: string } }) {
             setMonteCarloResults(data);
 
             // Find the position in the results with the highest value
-            // (excluding the non-numeric `suggested` map, added in A4)
+            // (excluding the non-numeric `suggested` and `homer_checks`
+            // maps, added in A4/A6)
             const bestPosition = Object.keys(data)
-              .filter((key) => key !== "suggested")
+              .filter((key) => key !== "suggested" && key !== "homer_checks")
               .reduce((a, b) =>
                 data[a as keyof MonteCarloResults] >
                 data[b as keyof MonteCarloResults]
@@ -518,6 +574,11 @@ export default function DraftIdPage({ params }: { params: { id: string } }) {
                             <span className="text-xs italic text-default-500">
                               {pick.reason}
                             </span>
+                          )}
+                          {monteCarloResults.homer_checks[position] && (
+                            <HomerCheckPanel
+                              check={monteCarloResults.homer_checks[position]}
+                            />
                           )}
                         </div>
                       );

@@ -68,6 +68,54 @@ export type MonteCarloResults = {
 // Draft results are just an object of each team name with a number (score) as value
 export type DraftResults = Record<string, number>;
 
+// Tier-depletion scarcity (GET /draft/:id/scarcity); shapes mirror
+// backend/models/scarcity.py
+export type ScarcityCall =
+  | "reach"
+  | "wait"
+  | "toss_up"
+  | "last_chance"
+  | "exhausted"
+  | "no_tiers";
+
+// One active-tier player with simulated survival odds
+export type PlayerAvailability = {
+  name: string;
+  tier: number | null;
+  projected_points: number;
+  survival_at_pick: number; // P(still available at your upcoming pick)
+  survival_at_next_pick: number; // P(still available one pick later)
+};
+
+// Depletion state and the directional call for one position
+export type PositionScarcity = {
+  position: string;
+  call: ScarcityCall;
+  message: string;
+  tier: number | null; // the active (best occupied) tier
+  remaining_now: number; // true undrafted count in the active tier
+  expected_at_pick: number;
+  expected_at_next_pick: number;
+  prob_tier_at_pick: number;
+  prob_tier_at_next_pick: number;
+  next_tier: number | null;
+  next_tier_remaining_now: number;
+  next_tier_expected_at_next_pick: number;
+  at_risk: PlayerAvailability[];
+};
+
+// Scarcity calls for every position at the simulator's upcoming pick
+export type ScarcityReport = {
+  current_pick: number;
+  your_pick: number;
+  your_next_pick: number | null;
+  on_the_clock: boolean;
+  final_pick: boolean;
+  iterations: number;
+  elapsed_seconds: number;
+  positions: PositionScarcity[];
+};
+
 // One source's most recent fetch, as reported by /rankings/status
 export type BatchStats = {
   success: boolean;

@@ -4,6 +4,7 @@ import { setupListeners } from "@reduxjs/toolkit/query";
 import { draftApi } from "./services/draft";
 import { leagueApi } from "./services/league";
 import { rankingsApi } from "./services/rankings";
+import { scarcityApi } from "./services/scarcity";
 
 export const store = configureStore({
   reducer: {
@@ -11,6 +12,7 @@ export const store = configureStore({
     [draftApi.reducerPath]: draftApi.reducer,
     [leagueApi.reducerPath]: leagueApi.reducer,
     [rankingsApi.reducerPath]: rankingsApi.reducer,
+    [scarcityApi.reducerPath]: scarcityApi.reducer,
   },
   // Adding the api middleware enables caching, invalidation, polling,
   // and other useful features of `rtk-query`.
@@ -18,7 +20,8 @@ export const store = configureStore({
     getDefaultMiddleware()
       .concat(draftApi.middleware)
       .concat(leagueApi.middleware)
-      .concat(rankingsApi.middleware),
+      .concat(rankingsApi.middleware)
+      .concat(scarcityApi.middleware),
 });
 
 // optional, but required for refetchOnFocus/refetchOnReconnect behaviors

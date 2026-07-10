@@ -15,7 +15,7 @@ from sklearn.linear_model import LogisticRegression
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.cors import CORSMiddleware
 import time
-from typing import List
+from typing import List, Union
 
 from data_sources import service as ranking_service
 from data_sources.base import SourceFetchError
@@ -42,7 +42,7 @@ from models.config import (
     SCORING_FORMAT,
     SNAKE_DRAFT,
 )
-from models.player import Player, Players, PlayerPoints
+from models.player import Player, Players, PlayerPoints, PlayerTag
 from models.position import PositionMaxPoints, PositionSizes, PositionTierDistributions
 from models.scarcity import (
     AT_RISK_LIMIT,
@@ -390,6 +390,38 @@ def draft_player(player_name: str, league: League):
     # Draft the player
     league.add_player_to_current_draft_turn_team(player)
     return
+
+
+def set_player_tag(player_name: str, tag: Union[str, None], league: League) -> Player:
+    """
+    Set (tag is a value) or clear (tag is None) a player's tag, keeping the
+    flat players list and the player's position list in sync
+    """
+    players = league.players
+    matches = [player for player in players.players if player.name == player_name]
+    if not matches:
+        raise HTTPException(status_code=404, detail="Player not found")
+    position = matches[0].position.lower()
+
+    updated_player = None
+    for k in ["players", position]:
+        if hasattr(players, k):
+            position_players = getattr(players, k)
+            player_index = next(
+                (
+                    index
+                    for index, player in enumerate(position_players)
+                    if player.name == player_name
+                ),
+                None,
+            )
+            if player_index is None:
+                continue
+            new_player = Player(**position_players[player_index].model_dump())
+            new_player.tag = tag
+            position_players[player_index] = new_player
+            updated_player = new_player
+    return updated_player
 
 
 def simulate_draft(league: League, draft_pick_model: RegressorMixin):
@@ -858,20 +890,27 @@ async def add_players_to_league(
 
 
 @app.get("/league/{league_id}/player", response_model=Players, tags=["player"])
-async def get_players(league_id: ObjectId, draftable_only: bool = True):
+async def get_players(
+    league_id: ObjectId,
+    draftable_only: bool = True,
+    tag: Union[PlayerTag, None] = None,
+):
     """
-    Get all players in a league
+    Get all players in a league, optionally filtered to drafted status
+    and/or a tag (A3): sleeper, my_guy, avoid
     """
     league = await get_a_league_by_id(league_id)
     players = league.players
 
-    # Before returning the data, filter out drafted players if requested
+    filtered = players.players
     if draftable_only:
-        return Players(
-            players=[p for p in players.players if not p.drafted]
-        )
-    else:
-        return players
+        filtered = [p for p in filtered if not p.drafted]
+    if tag is not None:
+        filtered = [p for p in filtered if p.tag == tag]
+
+    if draftable_only or tag is not None:
+        return Players(players=filtered)
+    return players
 
 
 @app.delete("/league/{league_id}/player", tags=["player"])
@@ -897,6 +936,36 @@ async def get_player(league_id: ObjectId, player_name: str):
     if not player:
         raise HTTPException(status_code=404, detail="Player not found")
     return player[0]
+
+
+@app.post(
+    "/league/{league_id}/player/{player_name}/tag",
+    response_model=Player,
+    tags=["player"],
+)
+async def tag_player(league_id: ObjectId, player_name: str, tag: PlayerTag):
+    """
+    Set a player's tag (sleeper / my_guy / avoid); replaces any existing tag
+    """
+    league = await get_a_league_by_id(league_id)
+    player = set_player_tag(player_name, tag, league)
+    await engine.save(league)
+    return player
+
+
+@app.delete(
+    "/league/{league_id}/player/{player_name}/tag",
+    response_model=Player,
+    tags=["player"],
+)
+async def untag_player(league_id: ObjectId, player_name: str):
+    """
+    Clear a player's tag
+    """
+    league = await get_a_league_by_id(league_id)
+    player = set_player_tag(player_name, None, league)
+    await engine.save(league)
+    return player
 
 
 async def get_latest_blend(season: int, scoring_format: str) -> BlendedRanking:

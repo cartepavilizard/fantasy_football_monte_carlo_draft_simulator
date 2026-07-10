@@ -7,6 +7,7 @@ import { Input } from "@nextui-org/input";
 import { Link } from "@nextui-org/link";
 import { Progress } from "@nextui-org/progress";
 import { Spinner } from "@nextui-org/spinner";
+import { Switch } from "@nextui-org/switch";
 import { useTheme } from "next-themes";
 
 import {
@@ -17,6 +18,8 @@ import {
 } from "@/api/services/league";
 import { title, subtitle } from "@/components/primitives";
 import { LeagueSimple } from "@/types";
+
+const TOTAL_STEPS = 6;
 
 interface SetupContextType {
   theme: string | undefined;
@@ -67,18 +70,68 @@ export default function SetupPage() {
   const [historicalPlayersFile, setHistoricalPlayersFile] =
     useState<File | null>(null);
 
+  // Optional league settings; blank means "use the backend's default"
+  const [roundSize, setRoundSize] = useState<string>("");
+  const [rosterSize, setRosterSize] = useState<string>("");
+  const [snakeDraft, setSnakeDraft] = useState<boolean>(true);
+  const [qbSize, setQbSize] = useState<string>("");
+  const [rbSize, setRbSize] = useState<string>("");
+  const [wrSize, setWrSize] = useState<string>("");
+  const [teSize, setTeSize] = useState<string>("");
+  const [flexSize, setFlexSize] = useState<string>("");
+  const [dstSize, setDstSize] = useState<string>("");
+  const [kSize, setKSize] = useState<string>("");
+
+  // Parse an optional single-row settings CSV and fill in the fields above,
+  // so the fields stay the single source of truth (still editable after)
+  const handleSettingsFile = (file: File) => {
+    const reader = new FileReader();
+
+    reader.onload = (e) => {
+      const text = (e.target?.result as string) ?? "";
+      const lines = text.trim().split(/\r?\n/);
+
+      if (lines.length < 2) return;
+      const headers = lines[0].split(",").map((h) => h.trim().toLowerCase());
+      const values = lines[1].split(",").map((v) => v.trim());
+      const row: Record<string, string> = {};
+
+      headers.forEach((h, i) => {
+        row[h] = values[i];
+      });
+
+      if (row["round size"]) setRoundSize(row["round size"]);
+      if (row["roster size"]) setRosterSize(row["roster size"]);
+      if (row["snake draft"]) {
+        setSnakeDraft(
+          row["snake draft"].toLowerCase() === "true" || row["snake draft"] === "1",
+        );
+      }
+      if (row["qb"]) setQbSize(row["qb"]);
+      if (row["rb"]) setRbSize(row["rb"]);
+      if (row["wr"]) setWrSize(row["wr"]);
+      if (row["te"]) setTeSize(row["te"]);
+      if (row["flex"]) setFlexSize(row["flex"]);
+      if (row["dst"]) setDstSize(row["dst"]);
+      if (row["k"]) setKSize(row["k"]);
+    };
+    reader.readAsText(file);
+  };
+
   // Validate for each step that the required fields are filled
   const validateStep = () => {
     switch (progressStep) {
       case 0:
         return leagueName !== null && leagueName !== "";
       case 1:
-        return teamsFile !== null;
+        return true; // League settings are all optional
       case 2:
-        return historicalDraftFile !== null;
+        return teamsFile !== null;
       case 3:
-        return playersFile !== null;
+        return historicalDraftFile !== null;
       case 4:
+        return playersFile !== null;
+      case 5:
         return historicalPlayersFile !== null;
       default:
         return false;
@@ -100,6 +153,16 @@ export default function SetupPage() {
     const newLeague: LeagueSimple = await createLeague({
       name: leagueName as string,
       teams: teamsFile as File,
+      round_size: roundSize === "" ? undefined : Number(roundSize),
+      roster_size: rosterSize === "" ? undefined : Number(rosterSize),
+      snake_draft: snakeDraft,
+      qb_size: qbSize === "" ? undefined : Number(qbSize),
+      rb_size: rbSize === "" ? undefined : Number(rbSize),
+      wr_size: wrSize === "" ? undefined : Number(wrSize),
+      te_size: teSize === "" ? undefined : Number(teSize),
+      flex_size: flexSize === "" ? undefined : Number(flexSize),
+      dst_size: dstSize === "" ? undefined : Number(dstSize),
+      k_size: kSize === "" ? undefined : Number(kSize),
     })
       .unwrap()
       .catch(() => {
@@ -134,11 +197,21 @@ export default function SetupPage() {
     historicalDraftFile,
     historicalPlayersFile,
     playersFile,
+    roundSize,
+    rosterSize,
+    snakeDraft,
+    qbSize,
+    rbSize,
+    wrSize,
+    teSize,
+    flexSize,
+    dstSize,
+    kSize,
   ]);
 
   // When on the last step, create the league
   useEffect(() => {
-    if (progressStep === 5) {
+    if (progressStep === TOTAL_STEPS) {
       handleCreateLeague();
     }
   }, [progressStep, handleCreateLeague]);
@@ -180,8 +253,8 @@ export default function SetupPage() {
               "Error"
             ) : isCreated ? (
               "Success"
-            ) : progressStep < 5 ? (
-              `Step ${progressStep + 1} of 5`
+            ) : progressStep < TOTAL_STEPS ? (
+              `Step ${progressStep + 1} of ${TOTAL_STEPS}`
             ) : (
               <span className="flex items-center">
                 <Spinner size="sm" />
@@ -190,7 +263,7 @@ export default function SetupPage() {
             )
           }
           size="lg"
-          value={progressStep * 20}
+          value={(progressStep / TOTAL_STEPS) * 100}
         />
 
         {/* Step 1 */}
@@ -213,6 +286,133 @@ export default function SetupPage() {
         {/* Step 2 */}
         {progressStep === 1 && (
           <div className="flex flex-col gap-4 w-full items-center">
+            <p className="text-left w-full">
+              These settings are optional — leave any field blank to use the
+              default. Match them to your real league (see your league&apos;s
+              roster settings) so simulation results are accurate.
+            </p>
+            <Input
+              id="settings-csv"
+              label="Settings CSV (optional)"
+              size="lg"
+              type="file"
+              variant={theme === "light" ? "faded" : "flat"}
+              onChange={(e) => {
+                if (!e.target.files || e.target.files.length === 0) {
+                  return;
+                }
+                handleSettingsFile(e.target.files[0]);
+              }}
+            />
+            <p className="text-left w-full">
+              Upload a CSV to fill in the fields below instead of typing them
+              in. To see a template of this file, please{" "}
+              <Link href="/settings.csv">click here</Link>. Fields stay
+              editable after upload.
+            </p>
+            <div className="flex gap-4 w-full">
+              <Input
+                id="round-size"
+                label="Rounds"
+                size="lg"
+                type="number"
+                value={roundSize}
+                variant={theme === "light" ? "faded" : "flat"}
+                onChange={(e) => setRoundSize(e.target.value)}
+              />
+              <Input
+                id="roster-size"
+                label="Roster Size"
+                size="lg"
+                type="number"
+                value={rosterSize}
+                variant={theme === "light" ? "faded" : "flat"}
+                onChange={(e) => setRosterSize(e.target.value)}
+              />
+            </div>
+            <div className="flex items-center gap-4 w-full">
+              <span>Snake Draft</span>
+              <Switch isSelected={snakeDraft} onValueChange={setSnakeDraft} />
+            </div>
+            <p className="text-left w-full">Starting roster spots:</p>
+            <div className="flex flex-wrap gap-4 w-full">
+              <Input
+                className="max-w-[7rem]"
+                id="qb-size"
+                label="QB"
+                size="lg"
+                type="number"
+                value={qbSize}
+                variant={theme === "light" ? "faded" : "flat"}
+                onChange={(e) => setQbSize(e.target.value)}
+              />
+              <Input
+                className="max-w-[7rem]"
+                id="rb-size"
+                label="RB"
+                size="lg"
+                type="number"
+                value={rbSize}
+                variant={theme === "light" ? "faded" : "flat"}
+                onChange={(e) => setRbSize(e.target.value)}
+              />
+              <Input
+                className="max-w-[7rem]"
+                id="wr-size"
+                label="WR"
+                size="lg"
+                type="number"
+                value={wrSize}
+                variant={theme === "light" ? "faded" : "flat"}
+                onChange={(e) => setWrSize(e.target.value)}
+              />
+              <Input
+                className="max-w-[7rem]"
+                id="te-size"
+                label="TE"
+                size="lg"
+                type="number"
+                value={teSize}
+                variant={theme === "light" ? "faded" : "flat"}
+                onChange={(e) => setTeSize(e.target.value)}
+              />
+              <Input
+                className="max-w-[7rem]"
+                id="flex-size"
+                label="FLEX"
+                size="lg"
+                type="number"
+                value={flexSize}
+                variant={theme === "light" ? "faded" : "flat"}
+                onChange={(e) => setFlexSize(e.target.value)}
+              />
+              <Input
+                className="max-w-[7rem]"
+                id="dst-size"
+                label="DST"
+                size="lg"
+                type="number"
+                value={dstSize}
+                variant={theme === "light" ? "faded" : "flat"}
+                onChange={(e) => setDstSize(e.target.value)}
+              />
+              <Input
+                className="max-w-[7rem]"
+                id="k-size"
+                label="K"
+                size="lg"
+                type="number"
+                value={kSize}
+                variant={theme === "light" ? "faded" : "flat"}
+                onChange={(e) => setKSize(e.target.value)}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Step 3 */}
+        {progressStep === 2 && (
+          <div className="flex flex-col gap-4 w-full items-center">
             <Input
               id="teams-csv"
               label="Teams CSV"
@@ -233,8 +433,8 @@ export default function SetupPage() {
           </div>
         )}
 
-        {/* Step 3 */}
-        {progressStep === 2 && (
+        {/* Step 4 */}
+        {progressStep === 3 && (
           <div className="flex flex-col gap-4 w-full items-center">
             <Input
               id="historical-drafts-csv"
@@ -256,8 +456,8 @@ export default function SetupPage() {
           </div>
         )}
 
-        {/* Step 4 */}
-        {progressStep === 3 && (
+        {/* Step 5 */}
+        {progressStep === 4 && (
           <div className="flex flex-col gap-4 w-full items-center">
             <Input
               id="players-csv"
@@ -279,8 +479,8 @@ export default function SetupPage() {
           </div>
         )}
 
-        {/* Step 5 */}
-        {progressStep === 4 && (
+        {/* Step 6 */}
+        {progressStep === 5 && (
           <div className="flex flex-col gap-4 w-full items-center">
             <Input
               id="historical-players-csv"
@@ -318,7 +518,7 @@ export default function SetupPage() {
         ) : null}
 
         {/* Next step button */}
-        {progressStep < 5 && (
+        {progressStep < TOTAL_STEPS && (
           <div className="flex w-full justify-between">
             <Button size="lg" variant="bordered" onClick={() => handleNext()}>
               Next

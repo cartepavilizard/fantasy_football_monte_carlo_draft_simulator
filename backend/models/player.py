@@ -4,8 +4,8 @@ ODMANTIC MODELS FOR PLAYERS
 """
 from .config import DRAFT_YEAR, MAX_RANDOM_ADJUSTMENT
 from .position import PositionMaxPoints, PositionTierDistributions, PositionTiers
-from odmantic import EmbeddedModel, Model
-from pydantic import field_validator, model_validator
+from odmantic import EmbeddedModel
+from pydantic import BaseModel, field_validator, model_validator
 import random
 from typing import Dict, List, Union
 
@@ -23,7 +23,7 @@ class PlayerPoints(EmbeddedModel):
     actual_points: Union[float, None] = None  # Will be none for current draft year
 
 
-class PlayerPointsRandomized(Model):
+class PlayerPointsRandomized(BaseModel):
     """
     Information about a random projection of points for a player,
     including the total adjustment to the original projection
@@ -82,7 +82,7 @@ class Player(EmbeddedModel):
         """
         Return a random point projection for the player, if a distribution exists
         """
-        output = {"projected_points": self.points[str(year)].projected_points}
+        output = {"projected_points": round(self.points[str(year)].projected_points)}
 
         # If the tier distribution is not available (DST & K), return the projected points
         tier_distribution = distributions.model_dump().get(self.position_tier, None)
@@ -159,35 +159,39 @@ class Players(EmbeddedModel):
                     data[player.position] = [player]
             data["years"] = sorted(list(years))
 
-        # For each position, order the players by projected points
-        # if the list is for the current draft
+        # Rank players within each season separately, so multi-season
+        # historical files neither crash nor compete across seasons
+        tiers = pt.model_dump()
         for year in data["years"]:
-            for position_order in positions:
-                if position_order in data:
-                    data[position_order] = sorted(
-                        data[position_order],
-                        key=lambda x: x.points[year].projected_points,
-                        reverse=True,
-                    )
-
-            # For each position tier, assign players to their tier
-            for position_tier in positions:
-                if position_tier not in pt.model_dump():
-                    if position_tier in data:  # DST & K do not have tiers
-                        for player in data[position_tier]:
-                            player.position_tier = player.position
-
-                # If the index is within the tier, assign the tier
+            for position in positions:
+                if position not in data:
+                    continue
+                year_players = sorted(
+                    [p for p in data[position] if year in p.points],
+                    key=lambda x: x.points[year].projected_points,
+                    reverse=True,
+                )
+                if position not in tiers:  # DST & K do not have tiers
+                    for player in year_players:
+                        player.position_tier = player.position
                 else:
-                    tier = pt.model_dump()[position_tier]
-                    if position_tier in data:
-                        for i, player in enumerate(data[position_tier]):
-                            if i < tier["1"]:
-                                player.position_tier = f"{position_tier}1"
-                            elif i < tier["2"]:
-                                player.position_tier = f"{position_tier}2"
-                            else:
-                                player.position_tier = f"{position_tier}3"
+                    tier = tiers[position]
+                    for i, player in enumerate(year_players):
+                        if i < tier["1"]:
+                            player.position_tier = f"{position}1"
+                        elif i < tier["2"]:
+                            player.position_tier = f"{position}2"
+                        else:
+                            player.position_tier = f"{position}3"
+
+        # Keep each position list ordered by the player's most recent season
+        for position in positions:
+            if position in data:
+                data[position] = sorted(
+                    data[position],
+                    key=lambda x: x.points[max(x.points)].projected_points,
+                    reverse=True,
+                )
 
         # Return the data
         data["ready_players"] = True

@@ -8,13 +8,10 @@ import datetime
 from .player import Player, Players
 from .position import PositionMaxPoints, PositionSizes, PositionTierDistributions
 from odmantic import EmbeddedModel, Model, ObjectId, Reference
-from pydantic import BaseModel, ConfigDict, model_validator
+from odmantic import Field as ODField
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sklearn.base import RegressorMixin
 from typing import List
-
-
-# Load the position sizes, determined by environment variables
-ps = PositionSizes()
 
 
 """
@@ -22,7 +19,7 @@ TEAM HELPER FUNCTION
 """
 
 
-def fill_starters(roster):
+def fill_starters(roster, sizes: PositionSizes):
     """
     Use projected points to fill the roster with the best players
     (used twice within the Team model, so it's a helper function)
@@ -31,7 +28,7 @@ def fill_starters(roster):
     output = {}
 
     # Perform the iteration for each position
-    for position, size in ps.model_dump().items():
+    for position, size in sizes.model_dump().items():
         players = [player for player in roster if player["position"] == position]
         if players:
 
@@ -55,10 +52,10 @@ def fill_starters(roster):
         flex_players,
         key=lambda x: x["points"][str(DRAFT_YEAR)]["projected_points"],
         reverse=True,
-    )[: ps.flex]
+    )[: sizes.flex]
 
     # Combine all positions for starters
-    positions = ps.model_dump().keys() | {"flex"}
+    positions = sizes.model_dump().keys() | {"flex"}
     output["starters"] = [
         player
         for position in positions
@@ -90,6 +87,9 @@ class Team(EmbeddedModel):
     simulator: bool = False
     draft_order: int
 
+    # Starting-lineup sizes for the team's league (defaults to env-var sizes)
+    position_sizes: PositionSizes = PositionSizes()
+
     # Roster is a list of players, while starters are the best for a position
     roster: List[Player] = []
     starters: List[Player] = []
@@ -110,7 +110,10 @@ class Team(EmbeddedModel):
         """
         if "roster" not in data or not data["roster"]:
             return data  # If roster is not in data, just return the data - there's nothing to do
-        starters = fill_starters(data["roster"])
+        sizes = data.get("position_sizes") or PositionSizes()
+        if isinstance(sizes, dict):
+            sizes = PositionSizes(**sizes)
+        starters = fill_starters(data["roster"], sizes)
         for position, players in starters.items():
             data[position] = players
         data["starters"] = starters.get("starters", [])
@@ -126,13 +129,14 @@ class Team(EmbeddedModel):
         position_weights = {}
         probabilities = model.predict_proba([[pick_number]])[0]
         for i, position in enumerate(model.classes_):
-            position_weights[position] = probabilities[i]
+            position_weights[position.lower()] = probabilities[i]
 
         # For each position, check if the starters are filled
         starting_positions = ["qb", "rb", "wr", "te", "dst", "k"]
+        sizes = self.position_sizes.model_dump()
         starting_filled = 0
         for position in starting_positions:
-            if len(getattr(self, position)) == ps.model_dump()[position]:
+            if len(getattr(self, position)) == sizes[position]:
                 starting_filled += 1
 
         # If all of the important positions are filled, return the position weights
@@ -141,11 +145,18 @@ class Team(EmbeddedModel):
 
         # Otherwise, adjust the weights based on the number of important positions filled
         for position in starting_positions:
-            if len(getattr(self, position)) == ps.model_dump()[position]:
+            if len(getattr(self, position)) == sizes[position]:
                 position_weights[position] = 0
 
         # Recalculate the total weight and return the position weights
         total_weight = sum(position_weights.values())
+        if total_weight == 0:
+            open_positions = [
+                p
+                for p in starting_positions
+                if len(getattr(self, p)) < sizes[p]
+            ]
+            return {p: 1 / len(open_positions) for p in open_positions}
         return {
             position: weight / total_weight
             for position, weight in position_weights.items()
@@ -204,7 +215,9 @@ class Team(EmbeddedModel):
             )
             new_player = Player(**player_data)
             roster_copy[i] = new_player
-        starters = fill_starters([x.model_dump() for x in roster_copy])["starters"]
+        starters = fill_starters(
+            [x.model_dump() for x in roster_copy], self.position_sizes
+        )["starters"]
         return sum(
             [player["points"][str(year)]["projected_points"] for player in starters]
         )
@@ -225,7 +238,7 @@ class LeagueSimple(BaseModel):
     to return to the user in the API, not model in the database
     """
 
-    created: datetime.datetime = datetime.datetime.now()
+    created: datetime.datetime = Field(default_factory=datetime.datetime.now)
     name: str = ""
     ready_for_draft: bool
     copy_for_draft: bool
@@ -237,12 +250,11 @@ class League(Model):
     All teams in the league, with draft order, based on settings
     """
 
-    created: datetime.datetime = datetime.datetime.now()
+    created: datetime.datetime = ODField(default_factory=datetime.datetime.now)
     name: str = ""
     roster_size: int = 14
     position_sizes: PositionSizes = PositionSizes()
     round_size: int = 14
-    snake_draft: bool = True
     ready_for_draft: bool = False
     copy_for_draft: bool = (
         False  # If a league is a copy, it can go in drafts and is editable
@@ -267,6 +279,9 @@ class League(Model):
         Sort the teams into their draft order and then create a list of their indices
         to help populate the draft results and validate whether a league is ready to draft
         """
+        data.setdefault("teams", [])
+        data.setdefault("current_draft_turn", 0)
+        data.setdefault("snake_draft", SNAKE_DRAFT)
         if not all([isinstance(team, Team) for team in data["teams"]]):
             data["teams"] = [Team(**team) for team in data["teams"]]
         if "logistic_regression_variables" in data and not (
@@ -286,7 +301,8 @@ class League(Model):
         # For the number of rounds, create the draft order as a list
         data["draft_order"] = []
         team_indices = [data["teams"].index(team) for team in data["teams"]]
-        for i in range(ROUND_SIZE):
+        rounds = int(data.get("round_size", ROUND_SIZE))
+        for i in range(rounds):
             if data["snake_draft"]:
                 if i % 2 == 0:
                     data["draft_order"].extend(team_indices)
@@ -352,7 +368,7 @@ class DraftSimple(BaseModel):
     to return to the user in the API, not model in the database
     """
 
-    created: datetime.datetime = datetime.datetime.now()
+    created: datetime.datetime = Field(default_factory=datetime.datetime.now)
     id: ObjectId
 
 
@@ -363,7 +379,7 @@ class Draft(Model):
     """
 
     league: League = Reference()
-    created: datetime.datetime = datetime.datetime.now()
+    created: datetime.datetime = ODField(default_factory=datetime.datetime.now)
 
 
 class MonteCarloSimulationResult(BaseModel):

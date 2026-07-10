@@ -4,6 +4,7 @@
 
 # Testing
 /coverage
+.pytest_cache/
 
 # Misc
 .DS_Store
@@ -45,12 +46,16 @@ MANIFEST
 .venv
 env/
 venv/
+venv*/
 ENV/
 env.bak/
 venv.bak/
 
 # VSCode
 .vscode
+
+# Claude Code local tool config
+.claude/
 
 # Production and Development Configuration
 app.yaml

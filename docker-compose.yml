@@ -1,34 +1,44 @@
-version: '3.8'
-
 services:
   mongodb:
-    image: mongo:4.4
+    image: mongo:7
     container_name: mongodb
     restart: always
-    ports:
-      - 27017:27017
+    # The backend reaches Mongo over the compose network; only expose the
+    # port for host-side tooling or local (LOCAL=true) runs, loopback-only:
+    # ports:
+    #   - 127.0.0.1:27017:27017
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     volumes:
       - mongodb_data:/data/db
   nextjs-app:
-    build: 
+    build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        # URL the user's browser uses to reach the backend
+        - NEXT_PUBLIC_API_URL=http://localhost:8000
     container_name: nextjs-app
     restart: always
     ports:
       - 3000:3000
   fastapi-backend:
-    build: 
+    build:
       context: ./backend
       dockerfile: Dockerfile
     container_name: fastapi-backend
     restart: always
+    environment:
+      - LOCAL=false
+      - DRAFT_YEAR=2024  # must match the Season column in your players CSV
     ports:
       - 8000:8000
-    volumes:
-      - ./backend:/app
     depends_on:
-      - mongodb
+      mongodb:
+        condition: service_healthy
 
 volumes:
   mongodb_data:

@@ -2,6 +2,8 @@
 """
 MONTE CARLO FANTASY FOOTBALL DRAFT SIMULATOR BACKEND
 """
+import asyncio
+from concurrent.futures import ProcessPoolExecutor
 import csv
 from datetime import datetime
 from fastapi import FastAPI, File, HTTPException, Response, UploadFile
@@ -10,11 +12,12 @@ from odmantic import AIOEngine, ObjectId
 import random
 from sklearn.base import RegressorMixin
 from sklearn.linear_model import LogisticRegression
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.cors import CORSMiddleware
 import time
 from typing import List
 
-from models.config import DRAFT_YEAR, LOCAL, ROUND_SIZE, SNAKE_DRAFT
+from models.config import DRAFT_YEAR, LOCAL, ROSTER_SIZE, ROUND_SIZE, SNAKE_DRAFT
 from models.player import Player, Players, PlayerPoints
 from models.position import PositionMaxPoints, PositionSizes, PositionTierDistributions
 from models.team import (
@@ -68,6 +71,10 @@ engine = AIOEngine(
     client=client,
 )
 
+# Monte Carlo simulations are CPU-bound; run them in a separate process so
+# they don't hold the GIL and starve other requests for their ~30s duration
+process_pool = ProcessPoolExecutor(max_workers=2)
+
 
 # Include origins for CORS
 origins = [
@@ -105,6 +112,22 @@ async def get_a_draft_by_id(draft_id: ObjectId) -> Draft:
     return draft
 
 
+def read_csv_upload(content: bytes, required_columns: set) -> list:
+    """
+    Parse an uploaded CSV and 422 with a clear message on bad shape
+    """
+    rows = list(csv.DictReader(content.decode("utf-8-sig").splitlines()))
+    if not rows:
+        raise HTTPException(status_code=422, detail="CSV file is empty")
+    missing = required_columns - set(rows[0].keys())
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=f"CSV missing required columns: {sorted(missing)}",
+        )
+    return rows
+
+
 def create_max_points(
     players: Players, draft_year: str = str(DRAFT_YEAR)
 ) -> PositionMaxPoints:
@@ -140,9 +163,11 @@ def create_historical_distributions(
 
         # For each year available in the player's points, get the percentage adjustment
         for year, points in player.points.items():
-            if points.actual_points and int(year) < int(
-                draft_year
-            ):  # Only use historical data
+            if (
+                points.actual_points is not None
+                and points.projected_points > 0
+                and int(year) < int(draft_year)
+            ):  # Only use historical data; keep 0-point (injury) seasons
                 distributions[player.position_tier].append(
                     (points.actual_points - points.projected_points)
                     / points.projected_points
@@ -163,9 +188,10 @@ def fit_logistic_regression_model(
         x = [[int(x)] for x in logistic_regression_variables.x]
         y = logistic_regression_variables.y
         draft_pick_model.fit(x, y)
-    except:
+    except (ValueError, TypeError, KeyError) as exc:
         raise HTTPException(
-            status_code=500, detail="Failed to train logistic regression model"
+            status_code=400,
+            detail=f"Failed to train logistic regression model: {exc}",
         )
     return draft_pick_model
 
@@ -192,6 +218,10 @@ def simulate_pick(
     weights = list(weights.values())
     position_players = []
     while len(position_players) == 0:
+        # If the total weights are zero, just go random
+        # (this can happen at the end of the draft)
+        if sum(weights) == 0:
+            weights = [1 for _ in positions]
         selection = random.choices(positions, weights=weights)[0]
         position_players = [
             x for x in getattr(players, selection) if x.drafted == False
@@ -199,13 +229,9 @@ def simulate_pick(
 
         # If there are no players left in that position, remove it from the list
         if len(position_players) == 0:
-            weights.remove(weights[positions.index(selection)])
-            positions.remove(selection)
-
-            # If the total weights are zero, reset them and just go random
-            # (this can happen at the end of the draft)
-            if sum(weights) == 0:
-                weights = [1 for _ in positions]
+            index = positions.index(selection)
+            positions.pop(index)
+            weights.pop(index)
 
     # Draft the best draftable player within that position
     player = position_players[0]
@@ -222,6 +248,8 @@ def draft_player(player_name: str, league: League):
         raise HTTPException(status_code=404, detail="Player not found")
     else:
         player = player[0]
+    if player.drafted:
+        raise HTTPException(status_code=400, detail="Player already drafted")
 
     # Set the player as drafted within the league
     position = player.position.lower()
@@ -266,8 +294,13 @@ def monte_carlo_draft(
     to determine which position is best to draft
     """
     simulator_team = [i for i, team in enumerate(league.teams) if team.simulator]
+    if not simulator_team:
+        raise HTTPException(
+            status_code=400, detail="League has no simulator team"
+        )
     results = {"qb": [], "rb": [], "wr": [], "te": []}
-    if league.current_draft_turn > ROUND_SIZE * 7:  # Add DST & K after round 7
+    # Add DST & K after round 7 (turns = teams per round * 7 rounds)
+    if league.current_draft_turn > len(league.teams) * 7:
         results["dst"] = []
         results["k"] = []
 
@@ -287,8 +320,7 @@ def monte_carlo_draft(
                 if player.drafted == False
             ]
             if len(possible_players) == 0:
-                results[position].append(0)  # No players left
-                continue
+                continue  # No players left; average the samples we have
             best_player = possible_players[0]
             league_copy = league.model_copy(deep=True)
             draft_player(best_player.name, league_copy)
@@ -305,9 +337,29 @@ def monte_carlo_draft(
 
     # Turn the arrays into averages
     for position in results.keys():
-        results[position] = round(sum(results[position]) / len(results[position]), 2)
+        samples = results[position]
+        results[position] = (
+            round(sum(samples) / len(samples), 2) if samples else 0.0
+        )
     results["iterations"] = i
     return MonteCarloSimulationResult(**results)
+
+
+def compute_draft_results(league: League) -> dict:
+    """
+    Run each team's randomized starter points 1000x and average them
+    """
+    results = {}
+    for team in league.teams:
+        points = [
+            team.randomized_starter_points(
+                distributions=league.position_tier_distributions,
+                max_points=league.position_max_points,
+            )
+            for _ in range(1000)
+        ]
+        results[team.name] = round(sum(points) / len(points), 2)
+    return results
 
 
 # Routes
@@ -316,7 +368,7 @@ async def create_league(
     file: UploadFile = File(...),
     name: str = "Fantasy Football League",
     round_size: int = ROUND_SIZE,
-    roster_size: int = 14,
+    roster_size: int = ROSTER_SIZE,
     snake_draft: bool = SNAKE_DRAFT,
     qb_size: int = 1,
     rb_size: int = 2,
@@ -329,7 +381,18 @@ async def create_league(
     """
     Read data from a POSTed CSV file and create a league
     """
-    data = csv.DictReader((await file.read()).decode("utf-8-sig").splitlines())
+    position_sizes = PositionSizes(
+        qb=qb_size,
+        rb=rb_size,
+        wr=wr_size,
+        te=te_size,
+        flex=flex_size,
+        dst=dst_size,
+        k=k_size,
+    )
+    data = read_csv_upload(
+        await file.read(), {"Name", "Order", "Owner", "Simulator"}
+    )
     teams = []
     for row in data:
         teams.append(
@@ -337,26 +400,18 @@ async def create_league(
                 name=row["Name"],
                 draft_order=row["Order"],
                 owner=row["Owner"],
-                simulator=row["Simulator"] == "True"
-                or row["Simulator"] == 1
-                or row["Simulator"] == "1",
+                position_sizes=position_sizes,
+                simulator=str(row["Simulator"]).strip().lower()
+                in ("true", "1"),
             )
         )
     league = League(
         teams=teams,
-        snake_draft=SNAKE_DRAFT,
+        snake_draft=snake_draft,
         name=name,
         round_size=round_size,
         roster_size=roster_size,
-        position_sizes=PositionSizes(
-            qb=qb_size,
-            rb=rb_size,
-            wr=wr_size,
-            te=te_size,
-            flex=flex_size,
-            dst=dst_size,
-            k=k_size,
-        ),
+        position_sizes=position_sizes,
         created=datetime.now(),
         copy_for_draft=False,
         current_draft_turn=0,
@@ -392,6 +447,9 @@ async def delete_league(league_id: ObjectId):
     Delete a league by its ID
     """
     league = await get_a_league_by_id(league_id)
+    drafts = await engine.find(Draft, Draft.league == league.id)
+    for draft in drafts:
+        await engine.delete(draft)
     await engine.delete(league)
     return Response(status_code=204)
 
@@ -444,7 +502,32 @@ async def add_players_to_league(
         )
 
     # Read the CSV file and create players
-    data = csv.DictReader((await file.read()).decode("utf-8-sig").splitlines())
+    data = read_csv_upload(
+        await file.read(), {"Season", "Player", "Pos", "Team", "Projected FFP"}
+    )
+
+    # Everything downstream reads points[str(DRAFT_YEAR)], so reject data
+    # for the wrong season now instead of 500ing on later requests
+    seasons = {str(row["Season"]) for row in data}
+    if str(DRAFT_YEAR) not in seasons:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Players file seasons {sorted(seasons)} do not include "
+                f"the configured DRAFT_YEAR ({DRAFT_YEAR})"
+            ),
+        )
+
+    # Players are looked up by name everywhere, so duplicates would
+    # silently collapse into one draftable player
+    names = [row["Player"] for row in data]
+    duplicates = sorted({n for n in names if names.count(n) > 1})
+    if duplicates:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Duplicate player names in CSV: {duplicates} "
+            "(disambiguate, e.g. append team abbreviation)",
+        )
     players = []
     for row in data:
         players.append(
@@ -482,7 +565,9 @@ async def get_players(league_id: ObjectId, draftable_only: bool = True):
 
     # Before returning the data, filter out drafted players if requested
     if draftable_only:
-        return Players(players=[player for player in players if not player.drafted])
+        return Players(
+            players=[p for p in players.players if not p.drafted]
+        )
     else:
         return players
 
@@ -506,7 +591,7 @@ async def get_player(league_id: ObjectId, player_name: str):
     Get a player by their name
     """
     league = await get_a_league_by_id(league_id)
-    player = [player for player in league.players if player.name == player_name]
+    player = [p for p in league.players.players if p.name == player_name]
     if not player:
         raise HTTPException(status_code=404, detail="Player not found")
     return player[0]
@@ -530,7 +615,10 @@ async def add_historical_player_data_to_league(
         )
 
     # Read the CSV file and create players
-    data = csv.DictReader((await file.read()).decode("utf-8-sig").splitlines())
+    data = read_csv_upload(
+        await file.read(),
+        {"Season", "Player", "Pos", "Team", "Projected FFP", "Actual FFP"},
+    )
     players = []
     for row in data:
         players.append(
@@ -604,13 +692,28 @@ async def add_historical_draft_data_to_league(
         )
 
     # Read the CSV file and create logistic regression variables
-    data = csv.DictReader((await file.read()).decode("utf-8-sig").splitlines())
+    data = read_csv_upload(await file.read(), {"Pick", "Pos"})
     x = []
     y = []
     for row in data:
         x.append(row["Pick"])
         y.append(row["Pos"])
     league.logistic_regression_variables = LogisticRegressionVariables(x=x, y=y)
+
+    # Sanity check: warn if the historical draft's pick numbers don't roughly
+    # match this league's round_size/team count, since a silent mismatch here
+    # means the simulator is tuned to a differently-shaped draft than yours
+    expected_picks_per_draft = league.round_size * len(league.teams)
+    max_pick = max((int(pick) for pick in x), default=0)
+    if expected_picks_per_draft and max_pick > expected_picks_per_draft:
+        print(
+            f"WARNING: historical_draft upload for league '{league.name}' has a "
+            f"max pick of {max_pick}, but this league is configured for only "
+            f"{expected_picks_per_draft} picks per draft ({league.round_size} rounds x "
+            f"{len(league.teams)} teams). Check round_size/roster_size in "
+            f"backend/models/config.py against your actual league settings."
+        )
+
     await engine.save(league)
     return league
 
@@ -656,11 +759,7 @@ async def get_drafts():
     """
     Get all drafts from leagues that exist
     """
-    leagues = await engine.find(League)
-    drafts = []
-    for league in leagues:
-        drafts += await engine.find(Draft, Draft.league == league.id)
-    return drafts
+    return await engine.find(Draft)
 
 
 @app.post("/draft/{draft_id}/pick", response_model=Draft, tags=["draft"])
@@ -671,6 +770,8 @@ async def make_draft_pick(
     Make a draft pick by name or using the simulator
     """
     draft = await get_a_draft_by_id(draft_id)
+    if not draft.league.draft_order:
+        raise HTTPException(status_code=400, detail="Draft is complete")
     if name and use_simulator:
         raise HTTPException(
             status_code=400, detail="Cannot include a name and use the simulator"
@@ -716,7 +817,10 @@ async def run_monte_carlo_simulation(draft_id: ObjectId):
     Run a Monte Carlo simulation to determine the best position to draft
     """
     draft = await get_a_draft_by_id(draft_id)
-    return monte_carlo_draft(draft.league)
+    if not draft.league.draft_order:
+        raise HTTPException(status_code=400, detail="Draft is complete")
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(process_pool, monte_carlo_draft, draft.league)
 
 
 # Get the results of a draft by running each team's randomized points 1000x times
@@ -730,15 +834,4 @@ async def get_draft_results(draft_id: ObjectId):
     Get the results of a draft by running each team's randomized points 1000x times
     """
     draft = await get_a_draft_by_id(draft_id)
-    results = {}
-    for team in draft.league.teams:
-        points = []
-        for _ in range(1000):
-            points.append(
-                team.randomized_starter_points(
-                    distributions=draft.league.position_tier_distributions,
-                    max_points=draft.league.position_max_points,
-                )
-            )
-        results[team.name] = round(sum(points) / len(points), 2)
-    return results
+    return await run_in_threadpool(compute_draft_results, draft.league)

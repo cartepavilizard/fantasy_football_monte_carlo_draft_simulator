@@ -20,7 +20,19 @@ from typing import List
 from data_sources import service as ranking_service
 from data_sources.base import SourceFetchError
 from data_sources.espn_history import ingest_league_history
+import backtest as backtest_module
 import profiling
+from models import config as app_config
+from models.tendencies import (
+    MISS_ADP_AFTER,
+    MISS_ADP_BEFORE,
+    MISS_LOOKBACK,
+    TOP_K_CANDIDATES,
+    build_generic_tendencies,
+    build_team_tendencies,
+    candidate_weights,
+    reach_sd_for,
+)
 from models.config import (
     DRAFT_YEAR,
     LOCAL,
@@ -217,6 +229,55 @@ def fit_logistic_regression_model(
     return draft_pick_model
 
 
+def _profiles_active(league: League, team: Team) -> bool:
+    """Owner-tendency behavior applies only when enabled AND mapped"""
+    return app_config.USE_OWNER_PROFILES and bool(
+        team.owner_tendencies or league.generic_tendencies
+    )
+
+
+def _recent_missed_position(league: League, pick_number: int):
+    """
+    Same inferred-miss definition the profiles were measured with: a
+    plausible target (ADP near this slot) taken in the last few picks
+    """
+    best_position = None
+    best_distance = None
+    for snapshot in league.draft_results[-MISS_LOOKBACK:]:
+        if not snapshot.roster:
+            continue
+        player = snapshot.roster[-1]  # the pick that snapshot records
+        if player.adp is None or not player.position:
+            continue
+        if (
+            pick_number - MISS_ADP_BEFORE
+            <= player.adp
+            <= pick_number + MISS_ADP_AFTER
+        ):
+            distance = abs(player.adp - pick_number)
+            if best_distance is None or distance < best_distance:
+                best_distance = distance
+                best_position = player.position
+    return best_position
+
+
+def _choose_position_player(
+    position_players: list, pick_number: int, team: Team, league: League
+) -> Player:
+    """
+    Stage 2: with profiles active, sample among the top candidates with
+    reach-aware weights; otherwise exactly the old deterministic best
+    """
+    if not _profiles_active(league, team) or len(position_players) == 1:
+        return position_players[0]
+    candidates = position_players[:TOP_K_CANDIDATES]
+    reach_sd = reach_sd_for(team.owner_tendencies, league.generic_tendencies)
+    weights = candidate_weights(
+        [candidate.adp for candidate in candidates], pick_number, reach_sd
+    )
+    return random.choices(candidates, weights=weights)[0]
+
+
 def simulate_pick(
     league: League,
     draft_pick_model: RegressorMixin,
@@ -229,8 +290,20 @@ def simulate_pick(
     # Calculate the weights
     team_index = league.draft_order[0]
     team = league.teams[team_index]
+    pick_number = league.current_draft_turn + 1
+    round_num = (
+        (pick_number - 1) // len(league.teams) + 1 if league.teams else 1
+    )
+    missed_position = (
+        _recent_missed_position(league, pick_number)
+        if _profiles_active(league, team)
+        else None
+    )
     weights = team.draft_turn_position_weights(
-        league.current_draft_turn + 1, draft_pick_model
+        pick_number,
+        draft_pick_model,
+        round_num=round_num,
+        missed_position=missed_position,
     )
     weights = {k.lower(): v for k, v in weights.items()}
 
@@ -254,8 +327,9 @@ def simulate_pick(
             positions.pop(index)
             weights.pop(index)
 
-    # Draft the best draftable player within that position
-    player = position_players[0]
+    # Draft a player within that position (reach-aware when profiles are
+    # active; the deterministic best otherwise)
+    player = _choose_position_player(position_players, pick_number, team, league)
     return player.name
 
 
@@ -821,6 +895,99 @@ async def get_owner_profile(profile_key: str):
     if not profile:
         raise HTTPException(status_code=404, detail="Owner profile not found")
     return profile
+
+
+@app.post("/league/{league_id}/owners/map", tags=["owners"])
+async def map_league_owners(
+    league_id: ObjectId,
+    team_name: str = "",
+    profile_key: str = "",
+    auto: bool = True,
+):
+    """
+    Attach owner tendency profiles to a league's teams. Auto-matching
+    compares each team's owner name (case-insensitive) against profile
+    keys and display names; pass team_name+profile_key to assign one
+    team manually (manual assignments win). Also precomputes the
+    league-generic reach tendencies used for unprofiled teams.
+    """
+    league = await get_a_league_by_id(league_id)
+    profiles = list(await engine.find(OwnerProfile))
+    if not profiles:
+        raise HTTPException(
+            status_code=400,
+            detail="No owner profiles exist; POST /owners/ingest/{espn_league_id} first",
+        )
+    if bool(team_name) != bool(profile_key):
+        raise HTTPException(
+            status_code=400,
+            detail="Manual mapping needs both team_name and profile_key",
+        )
+
+    by_key = {profile.profile_key: profile for profile in profiles}
+    # name -> profile, only when the name is unambiguous across profiles
+    name_index = {}
+    for profile in profiles:
+        for name in [profile.profile_key] + profile.display_names:
+            key = name.strip().lower()
+            name_index[key] = None if key in name_index else profile
+    matched, unmatched = {}, []
+
+    def assign(team: Team, profile: OwnerProfile):
+        team.owner_profile_key = profile.profile_key
+        team.owner_tendencies = build_team_tendencies(
+            profile.metrics, profile.profile_key
+        )
+        matched[team.name] = profile.profile_key
+
+    for team in league.teams:
+        if auto:
+            profile = name_index.get(team.owner.strip().lower())
+            if profile:
+                assign(team, profile)
+                continue
+        if not team.owner_profile_key:
+            unmatched.append({"team": team.name, "owner": team.owner})
+
+    if team_name:
+        team = next((t for t in league.teams if t.name == team_name), None)
+        if not team:
+            raise HTTPException(status_code=404, detail="Team not found")
+        profile = by_key.get(profile_key)
+        if not profile:
+            raise HTTPException(status_code=404, detail="Owner profile not found")
+        assign(team, profile)
+        unmatched = [entry for entry in unmatched if entry["team"] != team_name]
+
+    league.generic_tendencies = build_generic_tendencies(
+        [profile.metrics for profile in profiles]
+    )
+    await engine.save(league)
+    return {
+        "matched": matched,
+        "unmatched": unmatched,
+        "generic_tendencies": league.generic_tendencies,
+        "profiles_active": app_config.USE_OWNER_PROFILES,
+    }
+
+
+@app.post("/owners/backtest", tags=["owners"])
+async def run_owner_backtest(top_k: int = 5):
+    """
+    Leave-one-season-out replay of every ingested draft: predict each
+    real pick with the generic engine and the profile engine, and
+    compare position hit rate and player-in-top-K rate. The Phase 4
+    ship gate: profiles should only be trusted if this shows a lift.
+    """
+    picks = list(await engine.find(HistoricalPick))
+    if not picks:
+        raise HTTPException(
+            status_code=400, detail="No historical picks ingested yet"
+        )
+    alias_map = await profiling.load_alias_map(engine)
+    return await run_in_threadpool(
+        backtest_module.evaluate, picks, alias_map, top_k
+    )
 
 
 @app.post("/owners/alias", tags=["owners"])

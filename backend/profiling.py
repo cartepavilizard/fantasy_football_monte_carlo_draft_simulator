@@ -22,32 +22,27 @@ from typing import Dict, List, Optional
 
 from models.sources import HistoricalPick, OwnerAlias, OwnerProfile
 
+# Bucketing and miss-detection live in models.tendencies so the engine
+# simulates exactly the behavior the profiles measured
+from models.tendencies import (
+    MISS_ADP_AFTER,
+    MISS_ADP_BEFORE,
+    MISS_LOOKBACK,
+    ROUND_BUCKETS,
+    bucket_for_round,
+)
+
 # Weight = RECENCY_DECAY ** (current_season - season): a 2015 tendency
 # says less about this year than a 2025 one does
 RECENCY_DECAY = 0.9
 
-# (first_round, last_round, label); None = open-ended
-ROUND_BUCKETS = [(1, 2, "1-2"), (3, 5, "3-5"), (6, 9, "6-9"), (10, None, "10+")]
-
 REACH_THRESHOLD_PICKS = 6  # taken >= half a round (12-team) early = a reach
 RUN_LOOKBACK = 5  # a positional run = >= RUN_MIN of one position...
 RUN_MIN = 3  # ...within the previous RUN_LOOKBACK picks
-MISS_LOOKBACK = 3  # a target "sniped" this many picks before their turn
-# A plausible target's ADP sits near the owner's slot: not long gone
-# (adp >= slot - MISS_ADP_BEFORE) and not a later-round pick anyway
-MISS_ADP_BEFORE = 2
-MISS_ADP_AFTER = 6
 
 ONESIE_POSITIONS = ["qb", "te", "dst", "k"]
 
 PROFILE_POSITIONS = ["qb", "rb", "wr", "te", "dst", "k"]
-
-
-def bucket_for_round(round_num: int) -> str:
-    for first, last, label in ROUND_BUCKETS:
-        if round_num >= first and (last is None or round_num <= last):
-            return label
-    return ROUND_BUCKETS[-1][2]
 
 
 def _weighted_mean_sd(values: List[float], weights: List[float]):

@@ -50,6 +50,11 @@ DATA_SOURCE_CACHE_TTL_SECONDS = float(
     os.getenv("DATA_SOURCE_CACHE_TTL_SECONDS", 6 * 60 * 60)
 )
 
+# Owner tendency profiles in the simulation engine (Phase 4).
+# Off = the engine behaves exactly as before profiles existed, even for
+# leagues with mapped owners — the A/B switch is this one env var.
+USE_OWNER_PROFILES = os.getenv("USE_OWNER_PROFILES", "true").lower() == "true"
+
 # Ranking aggregation settings (Phase 1)
 SCORING_FORMAT = os.getenv("SCORING_FORMAT", "ppr")  # standard | half_ppr | ppr
 try:

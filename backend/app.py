@@ -20,6 +20,9 @@ from typing import List, Union
 from data_sources import service as ranking_service
 from data_sources.base import SourceFetchError
 from data_sources.espn_history import ingest_league_history
+from data_sources.espn_league import sync_all_leagues
+import inseason_api
+import notifications_api
 import backtest as backtest_module
 import profiling
 from scheduler import RankingsScheduler
@@ -54,6 +57,7 @@ from models.scarcity import (
     tier_breakdown,
 )
 from models.homer import homer_check
+from models.notifications import ensure_lock_reminders
 from models.sources import BlendedRanking, HistoricalPick, OwnerAlias, OwnerProfile
 from models.suggestions import SuggestedPick, suggest_candidate
 from models.team import (
@@ -97,6 +101,14 @@ tags_metadata = [
         "name": "owners",
         "description": "Owner tendency profiling: ingest ESPN historical drafts per owner and build frequency/average tendency profiles.",
     },
+    {
+        "name": "inseason",
+        "description": "In-season ESPN league sync and the cached-only read path for the multi-league/team-perspective views.",
+    },
+    {
+        "name": "notifications",
+        "description": "Durable in-app notifications and the polling contract a Claude Routine uses to push them to the phone.",
+    },
 ]
 
 
@@ -121,6 +133,14 @@ process_pool = ProcessPoolExecutor(max_workers=2)
 
 # Scheduled rankings refresh (enabled/paced via env and /rankings/schedule)
 rankings_scheduler = RankingsScheduler(lambda: engine)
+
+# Cached-only in-season reads (B4) + notifications (B5). The lambda is
+# late-bound: it resolves this module's `engine` global at call time, so
+# tests that monkeypatch app.engine are honored by the routers too.
+inseason_api.configure(lambda: engine)
+notifications_api.configure(lambda: engine)
+app.include_router(inseason_api.router)
+app.include_router(notifications_api.router)
 
 
 @app.on_event("startup")
@@ -1790,3 +1810,45 @@ async def get_draft_results(draft_id: ObjectId):
     """
     draft = await get_a_draft_by_id(draft_id)
     return await run_in_threadpool(compute_draft_results, draft.league)
+
+
+# --- In-season sync (B1): the ONLY route that talks to ESPN in-season. ---
+# Deliberately a POST and deliberately not part of inseason_api: every
+# GET under /inseason and /notifications is cached-only by construction.
+@app.post("/inseason/sync", tags=["inseason"])
+async def sync_inseason_leagues(
+    espn_league_id: Union[int, None] = None,
+    week: Union[int, None] = None,
+    season: int = DRAFT_YEAR,
+):
+    """
+    On-demand ESPN sync for one league (or every configured league) plus
+    the NFL schedule, then refresh any due lock reminders. Section
+    failures degrade to cached data and are reported in the summary —
+    this endpoint only errors when there is nothing to sync at all.
+    """
+    league_ids = (
+        [espn_league_id] if espn_league_id is not None else app_config.ESPN_LEAGUE_IDS
+    )
+    if not league_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="No league specified and ESPN_LEAGUE_IDS is not configured",
+        )
+    summary = await sync_all_leagues(
+        engine, season=season, week=week, league_ids=league_ids
+    )
+    # Reminders piggyback on every sync so an on-demand refresh close to
+    # kickoff creates them even if B3's scheduled loop isn't running
+    reminders = []
+    for league_id, league_summary in summary["leagues"].items():
+        if league_summary["week"] is None:
+            continue
+        created = await ensure_lock_reminders(
+            engine, league_id, season, league_summary["week"]
+        )
+        reminders.extend(
+            {"kind": n.kind, "title": n.title, "id": str(n.id)} for n in created
+        )
+    summary["lock_reminders_created"] = reminders
+    return summary

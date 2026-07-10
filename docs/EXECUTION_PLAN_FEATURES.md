@@ -42,6 +42,22 @@ weighting, a new external data source's *strategy*, or a scoring/valuation
 algorithm is [FRONTIER]; anything that is "one more endpoint / one more
 table / one more panel shaped like an existing one" is [CHEAP].
 
+**Model picker mapping** (what to select in the Claude Code model picker
+when starting a session for a task):
+
+- **[FRONTIER]** → the most capable model available: **Fable 5** if the
+  picker offers it, otherwise **Opus**.
+- **[CHEAP]** → **Sonnet**. (Haiku only for throwaway scripts, not code
+  that ships.)
+- **[SPLIT]** → a Fable 5/Opus session designs the core and leaves a spec;
+  a follow-up Sonnet session executes the repetitive remainder against
+  that spec — or the frontier session just finishes it if the remainder
+  is small.
+
+Do not switch models mid-task; one task, one session, one model. And never
+start a [CHEAP] task before the [FRONTIER]/[SPLIT] task it depends on has
+landed its interface.
+
 ---
 
 ## Phase A — Draft-Time Additions (now → Aug 15)

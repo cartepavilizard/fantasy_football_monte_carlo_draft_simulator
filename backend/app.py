@@ -44,6 +44,15 @@ from models.config import (
 )
 from models.player import Player, Players, PlayerPoints
 from models.position import PositionMaxPoints, PositionSizes, PositionTierDistributions
+from models.scarcity import (
+    AT_RISK_LIMIT,
+    SCARCITY_POSITIONS,
+    PlayerAvailability,
+    PositionScarcity,
+    ScarcityReport,
+    scarcity_call,
+    tier_breakdown,
+)
 from models.sources import BlendedRanking, HistoricalPick, OwnerAlias, OwnerProfile
 from models.team import (
     Draft,
@@ -469,6 +478,190 @@ def compute_draft_results(league: League) -> dict:
         ]
         results[team.name] = round(sum(points) / len(points), 2)
     return results
+
+
+def scarcity_analysis(
+    league: League,
+    seconds: float = 10,
+    max_iterations: int = 250,
+) -> ScarcityReport:
+    """
+    Tier-depletion scarcity engine (A1): Monte Carlo availability at the
+    simulator's next pick, and a reach-vs-wait call per position.
+
+    Each iteration simulates the opponents' picks between now and the
+    simulator's next-after-upcoming pick with the same machinery real
+    simulated drafts use (logistic position model + owner tendencies).
+    The simulator's own slot is skipped without removing a player: the
+    question is "what survives if I wait", and in that branch whichever
+    player the simulator takes is by definition not the one being
+    evaluated, so no removal is the exact counterfactual.
+    """
+    simulator_team = [i for i, team in enumerate(league.teams) if team.simulator]
+    if not simulator_team:
+        raise HTTPException(status_code=400, detail="League has no simulator team")
+    simulator = simulator_team[0]
+    simulator_slots = [
+        i for i, team_index in enumerate(league.draft_order) if team_index == simulator
+    ]
+    if not simulator_slots:
+        raise HTTPException(
+            status_code=400, detail="Simulator team has no remaining picks"
+        )
+
+    # Slot t1 is the simulator's upcoming pick (0 = on the clock now);
+    # slot t2 is the decision horizon — where "wait" would next pay off
+    t1 = simulator_slots[0]
+    t2 = simulator_slots[1] if len(simulator_slots) > 1 else None
+    final_pick = t2 is None
+    horizon = t1 if final_pick else t2
+    current_pick = league.current_draft_turn + 1
+
+    draft_pick_model = fit_logistic_regression_model(
+        league.logistic_regression_variables
+    )
+
+    # The active and next tier per position are fixed by the current
+    # pool, so their membership can be resolved before simulating
+    pools = {
+        position: [
+            player
+            for player in getattr(league.players, position)
+            if player.drafted == False
+        ]
+        for position in SCARCITY_POSITIONS
+    }
+    tiers = {position: tier_breakdown(pools[position]) for position in pools}
+    tier_names = {
+        position: {player.name for player in tiers[position][1]}
+        for position in pools
+    }
+    next_tier_names = {
+        position: {player.name for player in tiers[position][3]}
+        for position in pools
+    }
+    candidates = set().union(*tier_names.values(), *next_tier_names.values())
+
+    # Monte Carlo availability: per-player survival counts at both
+    # checkpoints, plus per-position "at least one active-tier player
+    # survived" counts (a joint outcome marginals can't reconstruct)
+    survive_at_pick = {name: 0 for name in candidates}
+    survive_at_next = {name: 0 for name in candidates}
+    any_at_pick = {position: 0 for position in pools}
+    any_at_next = {position: 0 for position in pools}
+    iterations = 0
+    start_time = time.time()
+    while horizon > 0 and iterations < max_iterations:
+        league_copy = league.model_copy(deep=True)
+        picked = []
+        for _ in range(horizon):
+            if league_copy.draft_order[0] == simulator:
+                # Skip the simulator's slot: assignment re-validation
+                # advances draft_order without removing a player
+                league_copy.current_draft_turn += 1
+            else:
+                name = simulate_pick(league_copy, draft_pick_model)
+                draft_player(name, league_copy)
+                picked.append(name)
+
+        # Slots before t1 are all opponents, so the first t1 picks are
+        # exactly the players gone by the simulator's upcoming pick
+        gone_at_pick = set(picked[:t1])
+        gone_at_next = set(picked)
+        for name in candidates:
+            if name not in gone_at_pick:
+                survive_at_pick[name] += 1
+            if name not in gone_at_next:
+                survive_at_next[name] += 1
+        for position in pools:
+            if tier_names[position] - gone_at_pick:
+                any_at_pick[position] += 1
+            if tier_names[position] - gone_at_next:
+                any_at_next[position] += 1
+        iterations += 1
+        if time.time() - start_time > seconds:
+            break
+
+    def probability(counter, name):
+        # With nothing simulated (on the clock at the final pick, or a
+        # zero horizon) every player is deterministically still here
+        return counter[name] / iterations if iterations else 1.0
+
+    positions = []
+    for position in SCARCITY_POSITIONS:
+        tier, tier_players, next_tier, next_tier_players = tiers[position]
+        remaining_now = len(tier_players)
+        expected_at_pick = sum(
+            probability(survive_at_pick, player.name) for player in tier_players
+        )
+        expected_at_next = sum(
+            probability(survive_at_next, player.name) for player in tier_players
+        )
+        prob_at_pick = (
+            any_at_pick[position] / iterations if iterations else float(remaining_now > 0)
+        )
+        prob_at_next = (
+            any_at_next[position] / iterations if iterations else float(remaining_now > 0)
+        )
+        call, message = scarcity_call(
+            position=position,
+            tier=tier,
+            remaining_now=remaining_now,
+            expected_at_next_pick=expected_at_next,
+            prob_tier_at_next_pick=prob_at_next,
+            next_tier=next_tier,
+            next_tier_remaining_now=len(next_tier_players),
+            final_pick=final_pick,
+        )
+        positions.append(
+            PositionScarcity(
+                position=position,
+                call=call,
+                message=message,
+                tier=tier,
+                remaining_now=remaining_now,
+                expected_at_pick=round(expected_at_pick, 2),
+                expected_at_next_pick=round(expected_at_next, 2),
+                prob_tier_at_pick=round(prob_at_pick, 4),
+                prob_tier_at_next_pick=round(prob_at_next, 4),
+                next_tier=next_tier,
+                next_tier_remaining_now=len(next_tier_players),
+                next_tier_expected_at_next_pick=round(
+                    sum(
+                        probability(survive_at_next, player.name)
+                        for player in next_tier_players
+                    ),
+                    2,
+                ),
+                at_risk=[
+                    PlayerAvailability(
+                        name=player.name,
+                        tier=tier,
+                        projected_points=player.points[
+                            max(player.points)
+                        ].projected_points,
+                        survival_at_pick=round(
+                            probability(survive_at_pick, player.name), 4
+                        ),
+                        survival_at_next_pick=round(
+                            probability(survive_at_next, player.name), 4
+                        ),
+                    )
+                    for player in tier_players[:AT_RISK_LIMIT]
+                ],
+            )
+        )
+
+    return ScarcityReport(
+        current_pick=current_pick,
+        your_pick=current_pick + t1,
+        your_next_pick=None if final_pick else current_pick + t2,
+        on_the_clock=t1 == 0,
+        final_pick=final_pick,
+        iterations=iterations,
+        elapsed_seconds=round(time.time() - start_time, 2),
+        positions=positions,
+    )
 
 
 # Routes
@@ -1413,6 +1606,27 @@ async def run_monte_carlo_simulation(draft_id: ObjectId):
         raise HTTPException(status_code=400, detail="Draft is complete")
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(process_pool, monte_carlo_draft, draft.league)
+
+
+# Tier-depletion scarcity: reach-vs-wait calls for the simulator's next pick
+@app.get(
+    "/draft/{draft_id}/scarcity",
+    response_model=ScarcityReport,
+    tags=["draft"],
+)
+async def get_draft_scarcity(draft_id: ObjectId, seconds: float = 10):
+    """
+    Simulate opponents' picks up to the simulator's next pick and report,
+    per position, tier depletion and whether to reach now or safely wait
+    """
+    draft = await get_a_draft_by_id(draft_id)
+    if not draft.league.draft_order:
+        raise HTTPException(status_code=400, detail="Draft is complete")
+    seconds = max(1.0, min(seconds, 30.0))
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        process_pool, scarcity_analysis, draft.league, seconds
+    )
 
 
 # Get the results of a draft by running each team's randomized points 1000x times

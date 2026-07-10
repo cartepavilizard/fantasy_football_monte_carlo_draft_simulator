@@ -7,6 +7,7 @@ from .config import DRAFT_YEAR, ROUND_SIZE, SNAKE_DRAFT
 import copy
 import datetime
 from .player import Player, Players
+from .homer import HomerCheck
 from .position import PositionMaxPoints, PositionSizes, PositionTierDistributions
 from .suggestions import SuggestedPick
 from .tendencies import blend_position_weights
@@ -429,3 +430,6 @@ class MonteCarloSimulationResult(BaseModel):
     # engine would actually take there, and why); positions whose
     # remaining players are all avoid-tagged are absent
     suggested: Dict[str, SuggestedPick] = {}
+    # A6: neutral value comparisons, present only for positions whose
+    # suggested pick is a HOMER_TEAM player
+    homer_checks: Dict[str, HomerCheck] = {}

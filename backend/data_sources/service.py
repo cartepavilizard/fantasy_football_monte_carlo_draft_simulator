@@ -107,7 +107,14 @@ async def latest_batch(
     if successful_only:
         criteria = criteria & (SourceRankingBatch.success == True)  # noqa: E712
     return await engine.find_one(
-        SourceRankingBatch, criteria, sort=query.desc(SourceRankingBatch.fetched_at)
+        SourceRankingBatch,
+        criteria,
+        # fetched_at is ms-truncated, so batches stored back-to-back tie;
+        # id (monotonic within a process) breaks toward the newest
+        sort=(
+            query.desc(SourceRankingBatch.fetched_at),
+            query.desc(SourceRankingBatch.id),
+        ),
     )
 
 
@@ -314,7 +321,9 @@ async def source_status(engine, season: int, scoring_format: str) -> dict:
         BlendedRanking,
         (BlendedRanking.season == season)
         & (BlendedRanking.scoring_format == scoring_format),
-        sort=query.desc(BlendedRanking.generated_at),
+        # ms-truncated timestamps tie for back-to-back blends; id breaks
+        # toward the newest
+        sort=(query.desc(BlendedRanking.generated_at), query.desc(BlendedRanking.id)),
     )
     return {
         "season": season,

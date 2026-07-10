@@ -53,6 +53,7 @@ from models.scarcity import (
     scarcity_call,
     tier_breakdown,
 )
+from models.homer import homer_check
 from models.sources import BlendedRanking, HistoricalPick, OwnerAlias, OwnerProfile
 from models.suggestions import SuggestedPick, suggest_candidate
 from models.team import (
@@ -484,6 +485,7 @@ def monte_carlo_draft(
     )
     candidates = {}
     suggested = {}
+    homer_checks = {}
     for position in results.keys():
         player, reason = suggest_candidate(
             league.players.__getattribute__(position),
@@ -495,6 +497,16 @@ def monte_carlo_draft(
             suggested[position] = SuggestedPick(
                 name=player.name, tag=player.tag, reason=reason
             )
+            # A6: a homer-team suggestion gets a neutral comparison
+            # against the top same-position alternatives
+            check = homer_check(
+                player,
+                pool=league.players.__getattribute__(position),
+                pick_number=league.current_draft_turn + 1,
+                year=str(DRAFT_YEAR),
+            )
+            if check:
+                homer_checks[position] = check
 
     # Begin the simulation
     start_time = time.time()
@@ -525,6 +537,7 @@ def monte_carlo_draft(
         )
     results["iterations"] = i
     results["suggested"] = suggested
+    results["homer_checks"] = homer_checks
     return MonteCarloSimulationResult(**results)
 
 
@@ -1012,7 +1025,9 @@ async def get_latest_blend(season: int, scoring_format: str) -> BlendedRanking:
         BlendedRanking,
         (BlendedRanking.season == season)
         & (BlendedRanking.scoring_format == scoring_format),
-        sort=query.desc(BlendedRanking.generated_at),
+        # generated_at is ms-truncated, so blends created back-to-back
+        # tie; id (monotonic within a process) breaks toward the newest
+        sort=(query.desc(BlendedRanking.generated_at), query.desc(BlendedRanking.id)),
     )
     if not blend:
         raise HTTPException(

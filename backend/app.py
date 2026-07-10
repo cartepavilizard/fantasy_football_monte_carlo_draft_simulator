@@ -8,7 +8,7 @@ import csv
 from datetime import datetime
 from fastapi import FastAPI, File, HTTPException, Response, UploadFile
 from motor.motor_asyncio import AsyncIOMotorClient
-from odmantic import AIOEngine, ObjectId
+from odmantic import AIOEngine, ObjectId, query
 import random
 from sklearn.base import RegressorMixin
 from sklearn.linear_model import LogisticRegression
@@ -17,9 +17,34 @@ from starlette.middleware.cors import CORSMiddleware
 import time
 from typing import List
 
-from models.config import DRAFT_YEAR, LOCAL, ROSTER_SIZE, ROUND_SIZE, SNAKE_DRAFT
+from data_sources import service as ranking_service
+from data_sources.base import SourceFetchError
+from data_sources.espn_history import ingest_league_history
+import backtest as backtest_module
+import profiling
+from scheduler import RankingsScheduler
+from models import config as app_config
+from models.tendencies import (
+    MISS_ADP_AFTER,
+    MISS_ADP_BEFORE,
+    MISS_LOOKBACK,
+    TOP_K_CANDIDATES,
+    build_generic_tendencies,
+    build_team_tendencies,
+    candidate_weights,
+    reach_sd_for,
+)
+from models.config import (
+    DRAFT_YEAR,
+    LOCAL,
+    ROSTER_SIZE,
+    ROUND_SIZE,
+    SCORING_FORMAT,
+    SNAKE_DRAFT,
+)
 from models.player import Player, Players, PlayerPoints
 from models.position import PositionMaxPoints, PositionSizes, PositionTierDistributions
+from models.sources import BlendedRanking, HistoricalPick, OwnerAlias, OwnerProfile
 from models.team import (
     Draft,
     DraftSimple,
@@ -53,6 +78,14 @@ tags_metadata = [
         "name": "draft",
         "description": "Drafts are copies of leagues, which can simulate a round-by-round draft.",
     },
+    {
+        "name": "rankings",
+        "description": "Automated ranking aggregation: fetch external sources, blend them, and sync the blend into a league's players.",
+    },
+    {
+        "name": "owners",
+        "description": "Owner tendency profiling: ingest ESPN historical drafts per owner and build frequency/average tendency profiles.",
+    },
 ]
 
 
@@ -74,6 +107,19 @@ engine = AIOEngine(
 # Monte Carlo simulations are CPU-bound; run them in a separate process so
 # they don't hold the GIL and starve other requests for their ~30s duration
 process_pool = ProcessPoolExecutor(max_workers=2)
+
+# Scheduled rankings refresh (enabled/paced via env and /rankings/schedule)
+rankings_scheduler = RankingsScheduler(lambda: engine)
+
+
+@app.on_event("startup")
+async def start_rankings_scheduler():
+    rankings_scheduler.start()
+
+
+@app.on_event("shutdown")
+async def stop_rankings_scheduler():
+    await rankings_scheduler.stop()
 
 
 # Include origins for CORS
@@ -138,10 +184,11 @@ def create_max_points(
     max_points = {}
     for position in ["qb", "rb", "wr", "te", "dst", "k"]:
         max_points[position] = max(
-            [
+            (
                 player.points[draft_year].projected_points
                 for player in players.__getattribute__(position)
-            ]
+            ),
+            default=0.0,  # a source blend may legitimately lack a position
         )
     return PositionMaxPoints(**max_points)
 
@@ -196,6 +243,55 @@ def fit_logistic_regression_model(
     return draft_pick_model
 
 
+def _profiles_active(league: League, team: Team) -> bool:
+    """Owner-tendency behavior applies only when enabled AND mapped"""
+    return app_config.USE_OWNER_PROFILES and bool(
+        team.owner_tendencies or league.generic_tendencies
+    )
+
+
+def _recent_missed_position(league: League, pick_number: int):
+    """
+    Same inferred-miss definition the profiles were measured with: a
+    plausible target (ADP near this slot) taken in the last few picks
+    """
+    best_position = None
+    best_distance = None
+    for snapshot in league.draft_results[-MISS_LOOKBACK:]:
+        if not snapshot.roster:
+            continue
+        player = snapshot.roster[-1]  # the pick that snapshot records
+        if player.adp is None or not player.position:
+            continue
+        if (
+            pick_number - MISS_ADP_BEFORE
+            <= player.adp
+            <= pick_number + MISS_ADP_AFTER
+        ):
+            distance = abs(player.adp - pick_number)
+            if best_distance is None or distance < best_distance:
+                best_distance = distance
+                best_position = player.position
+    return best_position
+
+
+def _choose_position_player(
+    position_players: list, pick_number: int, team: Team, league: League
+) -> Player:
+    """
+    Stage 2: with profiles active, sample among the top candidates with
+    reach-aware weights; otherwise exactly the old deterministic best
+    """
+    if not _profiles_active(league, team) or len(position_players) == 1:
+        return position_players[0]
+    candidates = position_players[:TOP_K_CANDIDATES]
+    reach_sd = reach_sd_for(team.owner_tendencies, league.generic_tendencies)
+    weights = candidate_weights(
+        [candidate.adp for candidate in candidates], pick_number, reach_sd
+    )
+    return random.choices(candidates, weights=weights)[0]
+
+
 def simulate_pick(
     league: League,
     draft_pick_model: RegressorMixin,
@@ -208,8 +304,20 @@ def simulate_pick(
     # Calculate the weights
     team_index = league.draft_order[0]
     team = league.teams[team_index]
+    pick_number = league.current_draft_turn + 1
+    round_num = (
+        (pick_number - 1) // len(league.teams) + 1 if league.teams else 1
+    )
+    missed_position = (
+        _recent_missed_position(league, pick_number)
+        if _profiles_active(league, team)
+        else None
+    )
     weights = team.draft_turn_position_weights(
-        league.current_draft_turn + 1, draft_pick_model
+        pick_number,
+        draft_pick_model,
+        round_num=round_num,
+        missed_position=missed_position,
     )
     weights = {k.lower(): v for k, v in weights.items()}
 
@@ -233,8 +341,9 @@ def simulate_pick(
             positions.pop(index)
             weights.pop(index)
 
-    # Draft the best draftable player within that position
-    player = position_players[0]
+    # Draft a player within that position (reach-aware when profiles are
+    # active; the deterministic best otherwise)
+    player = _choose_position_player(position_players, pick_number, team, league)
     return player.name
 
 
@@ -595,6 +704,489 @@ async def get_player(league_id: ObjectId, player_name: str):
     if not player:
         raise HTTPException(status_code=404, detail="Player not found")
     return player[0]
+
+
+async def get_latest_blend(season: int, scoring_format: str) -> BlendedRanking:
+    """
+    Get the most recently generated blend for a season/format
+    """
+    blend = await engine.find_one(
+        BlendedRanking,
+        (BlendedRanking.season == season)
+        & (BlendedRanking.scoring_format == scoring_format),
+        sort=query.desc(BlendedRanking.generated_at),
+    )
+    if not blend:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No blended rankings for season {season} "
+                f"({scoring_format}); POST /rankings/refresh first"
+            ),
+        )
+    return blend
+
+
+@app.post("/rankings/refresh", tags=["rankings"])
+async def refresh_player_rankings(
+    season: int = DRAFT_YEAR, scoring_format: str = SCORING_FORMAT, sources: str = ""
+):
+    """
+    Fetch all (or a comma-separated subset of) configured ranking sources,
+    store each source's batch, and generate a new blend. Sources fail
+    independently: a broken source is recorded and left out of the blend.
+    """
+    source_list = [name.strip() for name in sources.split(",") if name.strip()]
+    try:
+        return await ranking_service.refresh_rankings(
+            engine, season, scoring_format, sources=source_list or None
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/rankings/blended", response_model=BlendedRanking, tags=["rankings"])
+async def get_blended_rankings(
+    season: int = DRAFT_YEAR, scoring_format: str = SCORING_FORMAT
+):
+    """
+    Get the most recent blended ranking for a season and scoring format
+    """
+    return await get_latest_blend(season, scoring_format)
+
+
+@app.post("/rankings/udk", tags=["rankings"])
+async def upload_udk_rankings(
+    file: UploadFile = File(...),
+    season: int = DRAFT_YEAR,
+    scoring_format: str = SCORING_FORMAT,
+):
+    """
+    Ingest a Fantasy Footballers Ultimate Draft Kit CSV export — the
+    deliberate file-drop source (login-walled paid content is not
+    scraped). Player names resolve against the stored anchor namespace,
+    so run POST /rankings/refresh at least once before uploading; the
+    blend is regenerated immediately to include the upload.
+    """
+    from data_sources.udk import parse_udk_rows
+    from models.sources import SourceRankingBatch
+
+    rows = read_csv_upload(await file.read(), set())
+    records, problems = parse_udk_rows(rows)
+    if problems:
+        raise HTTPException(
+            status_code=422, detail=f"UDK export not usable: {problems}"
+        )
+    batch = SourceRankingBatch(
+        source="udk",
+        season=season,
+        scoring_format=scoring_format,
+        fetched_at=datetime.now(),
+        success=True,
+        records=[
+            {
+                "raw_name": record.raw_name,
+                "position": record.position,
+                "nfl_team": record.nfl_team,
+                "rank": record.rank,
+                "position_rank": record.position_rank,
+                "tier": record.tier,
+                "projection": record.projection,
+            }
+            for record in records
+        ],
+    )
+    summary = await ranking_service.ingest_push_batch(engine, batch)
+    if not summary["batch"]["anchored"]:
+        summary["warning"] = (
+            "No anchor rankings stored yet, so no names could be resolved; "
+            "POST /rankings/refresh, then re-upload this file"
+        )
+    return summary
+
+
+@app.get("/rankings/status", tags=["rankings"])
+async def get_rankings_status(
+    season: int = DRAFT_YEAR, scoring_format: str = SCORING_FORMAT
+):
+    """
+    Per-source freshness and configuration: last attempt, last success,
+    staleness age, and what the current blend was built from
+    """
+    return await ranking_service.source_status(engine, season, scoring_format)
+
+
+@app.get("/rankings/schedule", tags=["rankings"])
+async def get_rankings_schedule():
+    """
+    The scheduled-refresh state: enabled, interval, next/last run, and
+    the last run's outcome
+    """
+    return rankings_scheduler.status()
+
+
+@app.post("/rankings/schedule", tags=["rankings"])
+async def set_rankings_schedule(
+    enabled: bool = None, interval_hours: float = None
+):
+    """
+    Runtime control of the scheduled refresh. The draft-day switch is
+    enabled=false — nothing scheduled ever races a live draft; manual
+    POST /rankings/refresh keeps working while paused.
+    """
+    try:
+        rankings_scheduler.configure(
+            enabled=enabled, interval_hours=interval_hours
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return rankings_scheduler.status()
+
+
+@app.post(
+    "/league/{league_id}/historical_draft/sync",
+    response_model=League,
+    tags=["historical_draft"],
+)
+async def sync_historical_drafts_from_espn(
+    league_id: ObjectId, espn_league_id: int
+):
+    """
+    Train the opponent-pick regression from ingested ESPN draft history
+    instead of a CSV: uses every non-keeper pick with a known position
+    from that league's snake (non-auction) seasons. Replaces existing
+    regression data on re-run.
+    """
+    league = await get_a_league_by_id(league_id)
+    picks = list(
+        await engine.find(
+            HistoricalPick, HistoricalPick.espn_league_id == espn_league_id
+        )
+    )
+    if not picks:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No ingested history for ESPN league {espn_league_id}; "
+                "POST /owners/ingest/{espn_league_id} first"
+            ),
+        )
+    auction_seasons = {pick.season for pick in picks if pick.bid_amount}
+    usable = [
+        pick
+        for pick in picks
+        if pick.season not in auction_seasons
+        and pick.position
+        and not pick.is_keeper
+    ]
+    if not usable:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Ingested history has no usable picks (snake seasons with "
+                "matched positions); check /owners ingest logs"
+            ),
+        )
+    league.logistic_regression_variables = LogisticRegressionVariables(
+        x=[pick.overall_pick for pick in usable],
+        y=[pick.position for pick in usable],
+    )
+    await engine.save(league)
+    return league
+
+
+@app.post("/owners/ingest/{espn_league_id}", tags=["owners"])
+async def ingest_owner_history(
+    espn_league_id: int, seasons: str = "", rebuild_profiles: bool = True
+):
+    """
+    Pull pick-by-pick draft history for one ESPN league (all discoverable
+    seasons, or a comma-separated subset), backfill historical ADP from
+    FFC, and store per-owner picks. Re-running a season replaces it.
+    Private leagues need ESPN_S2/ESPN_SWID configured.
+    """
+    season_list = [int(s.strip()) for s in seasons.split(",") if s.strip()]
+    try:
+        summary = await ingest_league_history(
+            engine, espn_league_id, seasons=season_list or None
+        )
+    except SourceFetchError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    if rebuild_profiles:
+        summary["profiles"] = await profiling.build_owner_profiles(engine)
+    return summary
+
+
+@app.post("/owners/profiles/rebuild", tags=["owners"])
+async def rebuild_owner_profiles():
+    """
+    Recompute every owner tendency profile from stored historical picks
+    (auction seasons and keeper picks excluded; aliases applied)
+    """
+    return await profiling.build_owner_profiles(engine)
+
+
+@app.get("/owners", tags=["owners"])
+async def list_owners():
+    """
+    Every owner seen in ingested history: identity, coverage, and
+    whether a tendency profile exists — the review surface for deciding
+    which GUIDs to merge via aliases
+    """
+    picks = await engine.find(HistoricalPick)
+    alias_map = await profiling.load_alias_map(engine)
+    profiles = {p.profile_key for p in await engine.find(OwnerProfile)}
+    owners = {}
+    for pick in picks:
+        if not pick.member_guid:
+            continue
+        profile_key = alias_map.get(pick.member_guid, pick.member_guid)
+        entry = owners.setdefault(
+            profile_key,
+            {
+                "profile_key": profile_key,
+                "member_guids": set(),
+                "display_names": set(),
+                "espn_league_ids": set(),
+                "seasons": set(),
+                "picks": 0,
+            },
+        )
+        entry["member_guids"].add(pick.member_guid)
+        if pick.owner_display_name:
+            entry["display_names"].add(pick.owner_display_name)
+        entry["espn_league_ids"].add(pick.espn_league_id)
+        entry["seasons"].add(pick.season)
+        entry["picks"] += 1
+    return sorted(
+        (
+            {
+                "profile_key": entry["profile_key"],
+                "member_guids": sorted(entry["member_guids"]),
+                "display_names": sorted(entry["display_names"]),
+                "espn_league_ids": sorted(entry["espn_league_ids"]),
+                "seasons": sorted(entry["seasons"]),
+                "picks": entry["picks"],
+                "has_profile": entry["profile_key"] in profiles,
+            }
+            for entry in owners.values()
+        ),
+        key=lambda entry: -entry["picks"],
+    )
+
+
+@app.get("/owners/{profile_key}/profile", response_model=OwnerProfile, tags=["owners"])
+async def get_owner_profile(profile_key: str):
+    """
+    One owner's tendency profile — inspectable JSON, so 'does this match
+    how they actually draft' can be eyeballed before Phase 4 ever feeds
+    it to the simulator
+    """
+    profile = await engine.find_one(
+        OwnerProfile, OwnerProfile.profile_key == profile_key
+    )
+    if not profile:
+        raise HTTPException(status_code=404, detail="Owner profile not found")
+    return profile
+
+
+@app.post("/league/{league_id}/owners/map", tags=["owners"])
+async def map_league_owners(
+    league_id: ObjectId,
+    team_name: str = "",
+    profile_key: str = "",
+    auto: bool = True,
+):
+    """
+    Attach owner tendency profiles to a league's teams. Auto-matching
+    compares each team's owner name (case-insensitive) against profile
+    keys and display names; pass team_name+profile_key to assign one
+    team manually (manual assignments win). Also precomputes the
+    league-generic reach tendencies used for unprofiled teams.
+    """
+    league = await get_a_league_by_id(league_id)
+    profiles = list(await engine.find(OwnerProfile))
+    if not profiles:
+        raise HTTPException(
+            status_code=400,
+            detail="No owner profiles exist; POST /owners/ingest/{espn_league_id} first",
+        )
+    if bool(team_name) != bool(profile_key):
+        raise HTTPException(
+            status_code=400,
+            detail="Manual mapping needs both team_name and profile_key",
+        )
+
+    by_key = {profile.profile_key: profile for profile in profiles}
+    # name -> profile, only when the name is unambiguous across profiles
+    name_index = {}
+    for profile in profiles:
+        for name in [profile.profile_key] + profile.display_names:
+            key = name.strip().lower()
+            name_index[key] = None if key in name_index else profile
+    matched, unmatched = {}, []
+
+    def assign(team: Team, profile: OwnerProfile):
+        team.owner_profile_key = profile.profile_key
+        team.owner_tendencies = build_team_tendencies(
+            profile.metrics, profile.profile_key
+        )
+        matched[team.name] = profile.profile_key
+
+    for team in league.teams:
+        if auto:
+            profile = name_index.get(team.owner.strip().lower())
+            if profile:
+                assign(team, profile)
+                continue
+        if not team.owner_profile_key:
+            unmatched.append({"team": team.name, "owner": team.owner})
+
+    if team_name:
+        team = next((t for t in league.teams if t.name == team_name), None)
+        if not team:
+            raise HTTPException(status_code=404, detail="Team not found")
+        profile = by_key.get(profile_key)
+        if not profile:
+            raise HTTPException(status_code=404, detail="Owner profile not found")
+        assign(team, profile)
+        unmatched = [entry for entry in unmatched if entry["team"] != team_name]
+
+    league.generic_tendencies = build_generic_tendencies(
+        [profile.metrics for profile in profiles]
+    )
+    await engine.save(league)
+    return {
+        "matched": matched,
+        "unmatched": unmatched,
+        "generic_tendencies": league.generic_tendencies,
+        "profiles_active": app_config.USE_OWNER_PROFILES,
+    }
+
+
+@app.post("/owners/backtest", tags=["owners"])
+async def run_owner_backtest(top_k: int = 5):
+    """
+    Leave-one-season-out replay of every ingested draft: predict each
+    real pick with the generic engine and the profile engine, and
+    compare position hit rate and player-in-top-K rate. The Phase 4
+    ship gate: profiles should only be trusted if this shows a lift.
+    """
+    picks = list(await engine.find(HistoricalPick))
+    if not picks:
+        raise HTTPException(
+            status_code=400, detail="No historical picks ingested yet"
+        )
+    alias_map = await profiling.load_alias_map(engine)
+    return await run_in_threadpool(
+        backtest_module.evaluate, picks, alias_map, top_k
+    )
+
+
+@app.post("/owners/alias", tags=["owners"])
+async def create_owner_alias(
+    member_guid: str,
+    profile_key: str,
+    display_name: str = "",
+    note: str = "",
+    rebuild_profiles: bool = True,
+):
+    """
+    Merge an ESPN member GUID into a profile key (the same human across
+    accounts/leagues/co-owned teams). Re-posting a GUID updates it.
+    """
+    existing = await engine.find_one(
+        OwnerAlias, OwnerAlias.member_guid == member_guid
+    )
+    if existing:
+        existing.profile_key = profile_key
+        existing.display_name = display_name or existing.display_name
+        existing.note = note or existing.note
+        alias = existing
+    else:
+        alias = OwnerAlias(
+            member_guid=member_guid,
+            profile_key=profile_key,
+            display_name=display_name or None,
+            note=note or None,
+        )
+    await engine.save(alias)
+    result = {
+        "member_guid": alias.member_guid,
+        "profile_key": alias.profile_key,
+    }
+    if rebuild_profiles:
+        result["profiles"] = await profiling.build_owner_profiles(engine)
+    return result
+
+
+@app.post("/league/{league_id}/player/sync", response_model=League, tags=["player"])
+async def sync_players_from_blended_rankings(
+    league_id: ObjectId, scoring_format: str = SCORING_FORMAT
+):
+    """
+    Materialize the latest blend into the league's draftable players —
+    the no-CSV replacement for POST /league/{league_id}/player. Unlike
+    the upload route this replaces existing players (re-sync friendly);
+    leagues used for live drafting are copies, so replacement is safe.
+    """
+    league = await get_a_league_by_id(league_id)
+    blend = await get_latest_blend(DRAFT_YEAR, scoring_format)
+
+    players = []
+    seen = set()
+    for record in blend.records:  # already sorted best-first
+        if record.position not in ["qb", "rb", "wr", "te", "dst", "k"]:
+            continue
+        # The simulator runs on projected points, so a record no source
+        # projected (e.g. ADP-only deep sleepers) cannot be materialized
+        if record.blended_projection is None:
+            continue
+        if record.canonical_name in seen:
+            continue
+        seen.add(record.canonical_name)
+        players.append(
+            Player(
+                name=record.canonical_name,
+                position=record.position,
+                nfl_team=record.nfl_team or "",
+                drafted=False,
+                points={
+                    str(DRAFT_YEAR): PlayerPoints(
+                        projected_points=record.blended_projection
+                    )
+                },
+                adp=record.adp,
+                consensus_rank=record.consensus_rank,
+                tier=record.tier,
+                source_values=record.source_values,
+            )
+        )
+    if not players:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Latest blend has no records with blended projections; "
+                "refresh with at least one projection-bearing source "
+                "(sleeper, espn)"
+            ),
+        )
+
+    # A pool smaller than the draft would run out of players mid-simulation
+    total_picks = league.round_size * len(league.teams)
+    if len(players) < total_picks:
+        print(
+            f"WARNING: sync for league '{league.name}' materialized only "
+            f"{len(players)} players, but the draft needs {total_picks} picks "
+            f"({league.round_size} rounds x {len(league.teams)} teams). "
+            "Add projection-bearing sources or check the blend."
+        )
+
+    league.players = Players(players=players)
+    league.position_max_points = create_max_points(league.players)
+    league.ready_position_max_points = True
+    await engine.save(league)
+    return league
 
 
 @app.post(

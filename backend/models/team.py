@@ -2,16 +2,18 @@
 """
 ODMANTIC MODELS FOR TEAMS
 """
+from . import config as app_config
 from .config import DRAFT_YEAR, ROUND_SIZE, SNAKE_DRAFT
 import copy
 import datetime
 from .player import Player, Players
 from .position import PositionMaxPoints, PositionSizes, PositionTierDistributions
+from .tendencies import blend_position_weights
 from odmantic import EmbeddedModel, Model, ObjectId, Reference
 from odmantic import Field as ODField
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sklearn.base import RegressorMixin
-from typing import List
+from typing import List, Union
 
 
 """
@@ -87,6 +89,12 @@ class Team(EmbeddedModel):
     simulator: bool = False
     draft_order: int
 
+    # Owner tendency profile (Phase 4): mapped via /league/{id}/owners/map.
+    # owner_tendencies is a plain precomputed dict so the Monte Carlo hot
+    # loop never touches Mongo or profile models
+    owner_profile_key: Union[str, None] = None
+    owner_tendencies: dict = {}
+
     # Starting-lineup sizes for the team's league (defaults to env-var sizes)
     position_sizes: PositionSizes = PositionSizes()
 
@@ -120,7 +128,11 @@ class Team(EmbeddedModel):
         return data
 
     def draft_turn_position_weights(
-        self, pick_number: int, model: RegressorMixin
+        self,
+        pick_number: int,
+        model: RegressorMixin,
+        round_num: int = None,
+        missed_position: str = None,
     ) -> dict:
         """
         Use the starting line-up to determine the weight each
@@ -130,6 +142,20 @@ class Team(EmbeddedModel):
         probabilities = model.predict_proba([[pick_number]])[0]
         for i, position in enumerate(model.classes_):
             position_weights[position.lower()] = probabilities[i]
+
+        # Blend in this owner's round-bucket tendencies (sample-size
+        # gated; a thin or unknown owner stays purely on the model)
+        if (
+            app_config.USE_OWNER_PROFILES
+            and self.owner_tendencies
+            and round_num is not None
+        ):
+            position_weights = blend_position_weights(
+                position_weights,
+                self.owner_tendencies,
+                round_num,
+                missed_position=missed_position,
+            )
 
         # For each position, check if the starters are filled
         starting_positions = ["qb", "rb", "wr", "te", "dst", "k"]
@@ -260,6 +286,10 @@ class League(Model):
         False  # If a league is a copy, it can go in drafts and is editable
     )
     teams: List[Team]
+    # League-generic reach behavior (Phase 4): pooled across all known
+    # owners at mapping time; gives unprofiled teams realistic
+    # player-level variance in the simulation
+    generic_tendencies: dict = {}
     snake_draft: bool = SNAKE_DRAFT
     draft_order: List[int] = []
     draft_results: List[Team] = []

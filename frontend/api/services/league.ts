@@ -72,6 +72,30 @@ export const leagueApi = createApi({
       invalidatesTags: ["League"],
     }),
 
+    // Players can instead be materialized from the blended rankings with
+    // a POST to '/league/:id/player/sync' — the no-CSV path
+    syncPlayers: builder.mutation<void, { id: string }>({
+      query: ({ id }) => ({
+        url: `${leagueUrl}/${id}/player/sync`,
+        method: "POST",
+      }),
+      invalidatesTags: ["League"],
+    }),
+
+    // The opponent-pick regression can be trained from ingested ESPN
+    // draft history instead of a CSV
+    syncHistoricalDrafts: builder.mutation<
+      void,
+      { id: string; espnLeagueId: number }
+    >({
+      query: ({ id, espnLeagueId }) => ({
+        url: `${leagueUrl}/${id}/historical_draft/sync`,
+        method: "POST",
+        params: { espn_league_id: espnLeagueId },
+      }),
+      invalidatesTags: ["League"],
+    }),
+
     // Players are added from a file POSTed to '/league/:id/player'
     addPlayers: builder.mutation<void, { id: string; players: File }>({
       query: ({ id, players }) => {
@@ -142,6 +166,8 @@ export const {
   useCreateDraftMutation,
   useCreateLeagueMutation,
   useAddPlayersMutation,
+  useSyncPlayersMutation,
+  useSyncHistoricalDraftsMutation,
   useAddHistoricalDraftsMutation,
   useAddHistoricalPlayersMutation,
 } = leagueApi;

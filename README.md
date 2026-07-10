@@ -26,6 +26,48 @@ docker-compose up -d
 
 The frontend of the application will then be viewable on `localhost:3000`.
 
+## Automated Data Pipeline
+
+This fork adds two capabilities on top of the original CSV workflow (see
+`docs/ARCHITECTURE_REVIEW.md` for the full design):
+
+### Ranking aggregation (no players CSV needed)
+
+Player rankings, ADP, and projections are pulled automatically from
+Sleeper, FantasyFootballCalculator, ESPN, FantasyPros, and Yahoo, then
+normalized (per-source positional z-scores) into one blended projection.
+The Fantasy Footballers Ultimate Draft Kit joins the blend via a file
+drop of your subscriber CSV export — deliberately never scraped.
+
+- **Sources** page in the frontend: one-click refresh, per-source
+  freshness, UDK upload, and the refresh schedule (pause it on draft day).
+- Setup wizard: toggle "Build players from blended rankings" instead of
+  uploading a players CSV; toggle "Use ingested ESPN draft history"
+  instead of a historical drafts CSV.
+- API: `POST /rankings/refresh`, `GET /rankings/blended`,
+  `GET /rankings/status`, `POST /rankings/udk`,
+  `POST /league/{id}/player/sync`, `GET|POST /rankings/schedule`.
+- Scheduled refresh is controlled by `RANKINGS_REFRESH_ENABLED` and
+  `RANKINGS_REFRESH_INTERVAL_HOURS` (daily by default in docker-compose).
+- Credentials go in `.env`: `ESPN_S2`/`ESPN_SWID` (private-league ESPN
+  access), `YAHOO_CLIENT_ID`/`YAHOO_CLIENT_SECRET`/`YAHOO_REFRESH_TOKEN`
+  (Yahoo OAuth app), and optionally `FANTASYPROS_API_KEY`.
+
+### Owner tendency profiles
+
+With commissioner access, pick-by-pick draft history is ingested per
+owner from your ESPN leagues (`POST /owners/ingest/{espn_league_id}`),
+backfilled with historical ADP, and distilled into frequency/average
+tendency profiles: position frequency by round, reach behavior vs ADP,
+run participation, and inferred post-miss behavior. Map profiles onto a
+league with `POST /league/{id}/owners/map`, and the Monte Carlo engine
+blends each known owner's tendencies with the generic model (sample-size
+gated) and samples picks with reach-aware variance. Validate the lift on
+your own history with `POST /owners/backtest`, and disable everything
+with `USE_OWNER_PROFILES=false`.
+
+## Manual CSV Setup (original workflow, still supported)
+
 To correctly return results for your league, you'll need to tune the variables in `backend/models/config.py` to your league's settings and create a couple of CSV files:
 
 ### Players File

@@ -4,6 +4,7 @@ ENVIRONMENT CONFIGURATION VALUES FOR ODMANTIC MODELS AND SIMULATION
 """
 import datetime
 from dotenv import load_dotenv
+import json
 import os
 
 load_dotenv()
@@ -30,3 +31,46 @@ DRAFT_YEAR = int(
 )  # Default current year
 ROUND_SIZE = int(os.getenv("ROUND_SIZE", 14))
 SNAKE_DRAFT = os.getenv("SNAKE_DRAFT", "True").lower() == "true"
+
+# Data source credentials and settings (Phase 0)
+# Credentials live in env/.env ONLY — never stored in Mongo
+ESPN_S2 = os.getenv("ESPN_S2")  # cookie from a logged-in espn.com session
+ESPN_SWID = os.getenv("ESPN_SWID")  # matching SWID cookie, braces included
+ESPN_LEAGUE_IDS = [
+    int(league_id)
+    for league_id in os.getenv("ESPN_LEAGUE_IDS", "").replace(" ", "").split(",")
+    if league_id
+]  # comma-separated ids of the leagues to ingest history from
+YAHOO_CLIENT_ID = os.getenv("YAHOO_CLIENT_ID")
+YAHOO_CLIENT_SECRET = os.getenv("YAHOO_CLIENT_SECRET")
+YAHOO_REFRESH_TOKEN = os.getenv("YAHOO_REFRESH_TOKEN")
+FANTASYPROS_API_KEY = os.getenv("FANTASYPROS_API_KEY")  # optional partner key
+DATA_SOURCE_CACHE_DIR = os.getenv("DATA_SOURCE_CACHE_DIR", ".data_source_cache")
+DATA_SOURCE_CACHE_TTL_SECONDS = float(
+    os.getenv("DATA_SOURCE_CACHE_TTL_SECONDS", 6 * 60 * 60)
+)
+
+# Owner tendency profiles in the simulation engine (Phase 4).
+# Off = the engine behaves exactly as before profiles existed, even for
+# leagues with mapped owners — the A/B switch is this one env var.
+USE_OWNER_PROFILES = os.getenv("USE_OWNER_PROFILES", "true").lower() == "true"
+
+# Scheduled rankings refresh (Phase 5). Off by default so dev/test runs
+# never fetch on their own; docker-compose turns it on for the deployed
+# app. Runtime pause/resume via POST /rankings/schedule (draft-day switch).
+RANKINGS_REFRESH_ENABLED = (
+    os.getenv("RANKINGS_REFRESH_ENABLED", "false").lower() == "true"
+)
+RANKINGS_REFRESH_INTERVAL_HOURS = float(
+    os.getenv("RANKINGS_REFRESH_INTERVAL_HOURS", 24)
+)
+
+# Ranking aggregation settings (Phase 1)
+SCORING_FORMAT = os.getenv("SCORING_FORMAT", "ppr")  # standard | half_ppr | ppr
+try:
+    # Per-source blend weights, e.g. '{"espn": 1.0, "sleeper": 0.5}'
+    # (sources missing from the map default to weight 1.0)
+    RANKING_BLEND_WEIGHTS = json.loads(os.getenv("RANKING_BLEND_WEIGHTS", "{}"))
+except ValueError:
+    print("WARNING: RANKING_BLEND_WEIGHTS is not valid JSON; using equal weights")
+    RANKING_BLEND_WEIGHTS = {}

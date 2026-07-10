@@ -20,8 +20,72 @@ os.environ.setdefault("DRAFT_YEAR", "2024")
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BACKEND_DIR))
 
+import json
+
 import pytest
 from mongomock_motor import AsyncMongoMockClient
+
+from data_sources.transport import TransportResponse
+
+
+class FakeTransport:
+    """Scripted transport for data-source tests: canned payload, counts hits"""
+
+    def __init__(self, status_code=200, payload=None, text=None):
+        self.status_code = status_code
+        self.payload = payload if payload is not None else []
+        self.text = text  # raw body; wins over payload when set
+        self.calls = 0
+        self.last_url = None
+        self.last_params = None
+        self.last_headers = None
+
+    def _respond(self, url):
+        body = self.text if self.text is not None else json.dumps(self.payload)
+        return TransportResponse(status_code=self.status_code, text=body, url=url)
+
+    async def get(self, url, *, params=None, headers=None):
+        self.calls += 1
+        self.last_url = url
+        self.last_params = params
+        self.last_headers = headers
+        return self._respond(url)
+
+    async def post(self, url, *, data=None, headers=None):
+        self.calls += 1
+        self.last_url = url
+        self.last_params = data
+        self.last_headers = headers
+        return self._respond(url)
+
+    async def aclose(self):
+        return None
+
+
+class ScriptedTransport:
+    """Serves a fixed sequence of responses across get/post, records requests"""
+
+    def __init__(self, responses):
+        # responses: list of (status_code, body) where body is str or json-able
+        self._responses = list(responses)
+        self.requests = []  # (method, url, params/data, headers)
+
+    def _next(self, method, url, params, headers):
+        self.requests.append((method, url, params, headers))
+        if not self._responses:
+            raise AssertionError(f"ScriptedTransport exhausted at {method} {url}")
+        status_code, body = self._responses.pop(0)
+        text = body if isinstance(body, str) else json.dumps(body)
+        return TransportResponse(status_code=status_code, text=text, url=url)
+
+    async def get(self, url, *, params=None, headers=None):
+        return self._next("GET", url, params, headers)
+
+    async def post(self, url, *, data=None, headers=None):
+        return self._next("POST", url, data, headers)
+
+    async def aclose(self):
+        return None
 
 # The sample CSVs live in frontend/public (the single copy, served as
 # downloadable samples by the setup page); the tests double as

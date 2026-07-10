@@ -65,6 +65,21 @@ RANKINGS_REFRESH_INTERVAL_HOURS = float(
     os.getenv("RANKINGS_REFRESH_INTERVAL_HOURS", 24)
 )
 
+# Homer check (Phase A, task A6): the NFL team the user roots for.
+# When a suggested pick is from this team, the engine attaches a neutral
+# side-by-side comparison against the top alternatives
+HOMER_TEAM = os.getenv("HOMER_TEAM", "SEA").upper()
+
+# Tag effects in the suggestion engine (Phase A, task A4).
+# my_guy wins ties within max(percent-of-best, floor points) of the best
+# candidate's value; sleeper consideration ramps linearly from zero at
+# SLEEPER_BOOST_START (fraction of the draft elapsed) to SLEEPER_MAX_BOOST
+# at the final round. Selection-time effects only — never simulation scoring.
+MY_GUY_TIE_PERCENT = float(os.getenv("MY_GUY_TIE_PERCENT", 0.03))
+MY_GUY_TIE_FLOOR_POINTS = float(os.getenv("MY_GUY_TIE_FLOOR_POINTS", 5.0))
+SLEEPER_MAX_BOOST = float(os.getenv("SLEEPER_MAX_BOOST", 0.15))
+SLEEPER_BOOST_START = float(os.getenv("SLEEPER_BOOST_START", 0.5))
+
 # Ranking aggregation settings (Phase 1)
 SCORING_FORMAT = os.getenv("SCORING_FORMAT", "ppr")  # standard | half_ppr | ppr
 try:

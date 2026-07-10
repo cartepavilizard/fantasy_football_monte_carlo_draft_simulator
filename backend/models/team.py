@@ -7,13 +7,15 @@ from .config import DRAFT_YEAR, ROUND_SIZE, SNAKE_DRAFT
 import copy
 import datetime
 from .player import Player, Players
+from .homer import HomerCheck
 from .position import PositionMaxPoints, PositionSizes, PositionTierDistributions
+from .suggestions import SuggestedPick
 from .tendencies import blend_position_weights
 from odmantic import EmbeddedModel, Model, ObjectId, Reference
 from odmantic import Field as ODField
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sklearn.base import RegressorMixin
-from typing import List, Union
+from typing import Dict, List, Union
 
 
 """
@@ -424,3 +426,10 @@ class MonteCarloSimulationResult(BaseModel):
     dst: float = 0
     k: float = 0
     iterations: int = 0
+    # A4: the tag-aware candidate evaluated for each position (who the
+    # engine would actually take there, and why); positions whose
+    # remaining players are all avoid-tagged are absent
+    suggested: Dict[str, SuggestedPick] = {}
+    # A6: neutral value comparisons, present only for positions whose
+    # suggested pick is a HOMER_TEAM player
+    homer_checks: Dict[str, HomerCheck] = {}

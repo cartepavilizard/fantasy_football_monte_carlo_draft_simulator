@@ -7,10 +7,15 @@ from .position import PositionMaxPoints, PositionTierDistributions, PositionTier
 from odmantic import EmbeddedModel
 from pydantic import BaseModel, field_validator, model_validator
 import random
-from typing import Dict, List, Union
+from typing import Dict, List, Literal, Union
 
 # Load the position tiers, determined by environment variables
 pt = PositionTiers()
+
+# A player carries at most one tag at a time (A3); A4 reads it to filter
+# ("avoid"), break ties ("my_guy"), and boost late-round consideration
+# ("sleeper") in the suggestion engine
+PlayerTag = Literal["sleeper", "my_guy", "avoid"]
 
 
 class PlayerPoints(EmbeddedModel):
@@ -64,6 +69,9 @@ class Player(EmbeddedModel):
     consensus_rank: Union[float, None] = None
     tier: Union[int, None] = None
     source_values: Dict[str, float] = {}
+
+    # User-set tag (A3); None means untagged
+    tag: Union[PlayerTag, None] = None
 
     @field_validator("position", "position_tier")
     @classmethod

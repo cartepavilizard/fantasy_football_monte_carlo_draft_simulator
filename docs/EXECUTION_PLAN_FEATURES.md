@@ -66,16 +66,24 @@ Extends the existing draft simulator. No new external data required.
 
 | # | Task | Routing | Notes |
 | --- | --- | --- | --- |
-| A1 | **Tier-depletion scarcity engine**: given tier data per position, compute depletion state and produce a directional call — "reach now for last player in tier N at TE" vs. "safe to wait, tier N+1 has X options." Must consult Monte Carlo availability predictions, not just raw counts. | [FRONTIER] | Core algorithmic logic; interacts with the availability regression. |
-| A2 | **Scarcity nudge UI**: surface A1's output in the draft view (banner/badge per position, reach-vs-wait indicator). | [CHEAP] | UI wiring to an API response; mirrors existing draft-view panels. |
-| A3 | **Player tag data model + CRUD**: `sleeper` / `my_guy` / `avoid` tags on players; endpoints to set/clear/list; persistence in Mongo. | [CHEAP] | Textbook boilerplate CRUD + test scaffolding. |
-| A4 | **Tag effects in the suggestion engine**: `avoid` filters out of *all* suggestions regardless of projection; `my_guy` wins ties when values are close (define "close"); `sleeper` boosts late-round consideration (define boost curve). | [FRONTIER] | Touches simulation weighting and value comparison; the tie-break and boost semantics need careful design so tags don't distort the Monte Carlo itself. |
-| A5 | **Tag UI**: tag/untag from player tables, tag filter chips, visual markers in suggestion lists. | [CHEAP] | Repetitive frontend work against A3's API. |
-| A6 | **Homer check (draft scope)**: when a suggested pick is a Seahawks player, render a neutral side-by-side value comparison vs. the top non-Seahawks alternatives at that pick. | [SPLIT] | Frontier defines the comparison methodology once (reused in-season); cheaper model builds the display. |
+| A1 | **Tier-depletion scarcity engine**: given tier data per position, compute depletion state and produce a directional call — "reach now for last player in tier N at TE" vs. "safe to wait, tier N+1 has X options." Must consult Monte Carlo availability predictions, not just raw counts. | [FRONTIER] | **Done (2026-07-10).** `GET /draft/{draft_id}/scarcity` → `ScarcityReport`; consumer spec for A2 in `backend/models/scarcity.py`, engine in `scarcity_analysis` (app.py), tests in `backend/tests/test_scarcity.py`. |
+| A2 | **Scarcity nudge UI**: surface A1's output in the draft view (banner/badge per position, reach-vs-wait indicator). | [CHEAP] | **Done (2026-07-10).** Draft room fetches `GET /draft/{id}/scarcity` via a lazy RTK Query hook (explicit refresh, never on render); one card per position with a call badge, tier/remaining counts, message, and an expandable at-risk player list with survival odds. |
+| A3 | **Player tag data model + CRUD**: `sleeper` / `my_guy` / `avoid` tags on players; endpoints to set/clear/list; persistence in Mongo. | [CHEAP] | **Done (2026-07-10).** `Player.tag` (single optional tag, `backend/models/player.py`) plus `POST`/`DELETE /league/{id}/player/{name}/tag` and a `tag` filter on `GET /league/{id}/player`; tests in `backend/tests/test_player_tags.py`. |
+| A4 | **Tag effects in the suggestion engine**: `avoid` filters out of *all* suggestions regardless of projection; `my_guy` wins ties when values are close (define "close"); `sleeper` boosts late-round consideration (define boost curve). | [FRONTIER] | **Done (2026-07-10).** Semantics + spec in `backend/models/suggestions.py`: close = max(3% of best, 5 pts); sleeper boost ramps 0 → +15% over the draft's back half, selection-only (simulation scoring stays projection-pure). Monte Carlo result gains a `suggested` map (name/tag/reason per position) for A5's UI; avoid also excluded from scarcity option counts. Tests in `backend/tests/test_tag_effects.py`. |
+| A5 | **Tag UI**: tag/untag from player tables, tag filter chips, visual markers in suggestion lists. | [CHEAP] | **Done (2026-07-10).** `frontend/api/services/league.ts` adds `getPlayers` (with a `tag` filter), `tagPlayer`, and `untagPlayer`; the draft room (`frontend/app/draft-room/[id]/page.tsx`) gets per-row tag/untag icon controls, All/Sleepers/My Guys/Avoids filter chips backed by `?tag=`, a shared `TagBadge` marker reused in player rows, scarcity at-risk lists, and the Monte Carlo `suggested` panel (name, tag, and reason string per position). |
+| A6 | **Homer check (draft scope)**: when a suggested pick is a Seahawks player, render a neutral side-by-side value comparison vs. the top non-Seahawks alternatives at that pick. | [SPLIT] | **Done (2026-07-10).** Methodology in `backend/models/homer.py` (`homer_check` is the single function C9 reuses); draft scope rides on `MonteCarloSimulationResult.homer_checks`. Display: `frontend/app/draft-room/[id]/page.tsx` (`HomerCheckPanel`) renders a subtle green badge on a homer-team suggestion that expands into one comparison table (projection / consensus rank / ADP vs. pick / tier, tag markers on names) with the backend's `note` as caption, verbatim, equal visual weight on every row. Tag-blind by design; no recommendation field. Tests in `backend/tests/test_homer_check.py`. |
 
 **Phase A exit criteria:** full mock draft on sample data with tags and
 scarcity nudges active; existing 18+ test suite still green; new tests for
 A1/A3/A4.
+
+**✅ Phase A complete (2026-07-10).** Exit criteria verified by
+`backend/tests/test_phase_a_exit.py`: a full 196-pick mock draft on the
+shipped sample CSVs, driven through the real pick endpoint with tags set,
+checkpointing scarcity nudges (on-the-clock and final-pick), tag-aware
+suggestions, and homer checks along the way. Suite fully green (175
+tests), including a fix for HTTPException failing to pickle out of the
+process pool.
 
 ---
 

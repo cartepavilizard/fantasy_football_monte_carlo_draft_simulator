@@ -15,7 +15,7 @@ from sklearn.linear_model import LogisticRegression
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.cors import CORSMiddleware
 import time
-from typing import List
+from typing import List, Union
 
 from data_sources import service as ranking_service
 from data_sources.base import SourceFetchError
@@ -42,9 +42,20 @@ from models.config import (
     SCORING_FORMAT,
     SNAKE_DRAFT,
 )
-from models.player import Player, Players, PlayerPoints
+from models.player import Player, Players, PlayerPoints, PlayerTag
 from models.position import PositionMaxPoints, PositionSizes, PositionTierDistributions
+from models.scarcity import (
+    AT_RISK_LIMIT,
+    SCARCITY_POSITIONS,
+    PlayerAvailability,
+    PositionScarcity,
+    ScarcityReport,
+    scarcity_call,
+    tier_breakdown,
+)
+from models.homer import homer_check
 from models.sources import BlendedRanking, HistoricalPick, OwnerAlias, OwnerProfile
+from models.suggestions import SuggestedPick, suggest_candidate
 from models.team import (
     Draft,
     DraftSimple,
@@ -138,6 +149,39 @@ app.add_middleware(
 
 
 # Helper functions
+class WorkerHTTPError(Exception):
+    """
+    Picklable stand-in for HTTPException across the process-pool
+    boundary: HTTPException itself fails to unpickle (its __init__
+    requires status_code), which kills the whole pool with
+    BrokenProcessPool instead of surfacing the error
+    """
+
+    def __init__(self, status_code: int, detail: str):
+        super().__init__(status_code, detail)
+        self.status_code = status_code
+        self.detail = detail
+
+
+def run_in_worker(fn, *args):
+    """Run a pool-executed function, converting HTTPException to a
+    picklable error the endpoint can convert back"""
+    try:
+        return fn(*args)
+    except HTTPException as exc:
+        raise WorkerHTTPError(exc.status_code, exc.detail) from None
+
+
+async def run_pooled(fn, *args):
+    """Submit CPU-bound work to the process pool and restore any
+    HTTPException the worker raised"""
+    loop = asyncio.get_running_loop()
+    try:
+        return await loop.run_in_executor(process_pool, run_in_worker, fn, *args)
+    except WorkerHTTPError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+
+
 async def get_a_league_by_id(league_id: ObjectId) -> League:
     """
     Get a league by its ID
@@ -322,17 +366,32 @@ def simulate_pick(
     weights = {k.lower(): v for k, v in weights.items()}
 
     # Randomly choose which position to pick, based on the weights
+    all_weights = dict(weights)
     positions = list(weights.keys())
     weights = list(weights.values())
+    # A4: avoid is a hard constraint on the simulator team's behavior —
+    # it never drafts its avoids, live or inside rollouts. Soft tags
+    # (my_guy/sleeper) act only at the suggestion surface, never here,
+    # so the Monte Carlo's value estimates stay projection-pure
+    skip_avoids = team.simulator
     position_players = []
     while len(position_players) == 0:
+        # If every position is exhausted only because of the avoid
+        # filter, taking a tagged player beats crashing the draft
+        if not positions and skip_avoids:
+            skip_avoids = False
+            positions = list(all_weights.keys())
+            weights = list(all_weights.values())
+
         # If the total weights are zero, just go random
         # (this can happen at the end of the draft)
         if sum(weights) == 0:
             weights = [1 for _ in positions]
         selection = random.choices(positions, weights=weights)[0]
         position_players = [
-            x for x in getattr(players, selection) if x.drafted == False
+            x
+            for x in getattr(players, selection)
+            if x.drafted == False and not (skip_avoids and x.tag == "avoid")
         ]
 
         # If there are no players left in that position, remove it from the list
@@ -383,6 +442,38 @@ def draft_player(player_name: str, league: League):
     return
 
 
+def set_player_tag(player_name: str, tag: Union[str, None], league: League) -> Player:
+    """
+    Set (tag is a value) or clear (tag is None) a player's tag, keeping the
+    flat players list and the player's position list in sync
+    """
+    players = league.players
+    matches = [player for player in players.players if player.name == player_name]
+    if not matches:
+        raise HTTPException(status_code=404, detail="Player not found")
+    position = matches[0].position.lower()
+
+    updated_player = None
+    for k in ["players", position]:
+        if hasattr(players, k):
+            position_players = getattr(players, k)
+            player_index = next(
+                (
+                    index
+                    for index, player in enumerate(position_players)
+                    if player.name == player_name
+                ),
+                None,
+            )
+            if player_index is None:
+                continue
+            new_player = Player(**position_players[player_index].model_dump())
+            new_player.tag = tag
+            position_players[player_index] = new_player
+            updated_player = new_player
+    return updated_player
+
+
 def simulate_draft(league: League, draft_pick_model: RegressorMixin):
     """
     Simulate an entire draft using the logistic model
@@ -418,19 +509,46 @@ def monte_carlo_draft(
         league.logistic_regression_variables
     )
 
+    # A4: resolve each position's candidate once, tag-aware — avoid
+    # filtered, my_guy tie-break, late-round sleeper boost. Tags act
+    # here at the suggestion surface; inside the rollouts every drafted
+    # player scores raw projections
+    round_num = (
+        league.current_draft_turn // len(league.teams) + 1 if league.teams else 1
+    )
+    candidates = {}
+    suggested = {}
+    homer_checks = {}
+    for position in results.keys():
+        player, reason = suggest_candidate(
+            league.players.__getattribute__(position),
+            round_num,
+            league.round_size,
+        )
+        if player:
+            candidates[position] = player
+            suggested[position] = SuggestedPick(
+                name=player.name, tag=player.tag, reason=reason
+            )
+            # A6: a homer-team suggestion gets a neutral comparison
+            # against the top same-position alternatives
+            check = homer_check(
+                player,
+                pool=league.players.__getattribute__(position),
+                pick_number=league.current_draft_turn + 1,
+                year=str(DRAFT_YEAR),
+            )
+            if check:
+                homer_checks[position] = check
+
     # Begin the simulation
     start_time = time.time()
     i = 0
     while time.time() - start_time < seconds:
         for position in results.keys():
-            possible_players = [
-                player
-                for player in league.players.__getattribute__(position)
-                if player.drafted == False
-            ]
-            if len(possible_players) == 0:
-                continue  # No players left; average the samples we have
-            best_player = possible_players[0]
+            if position not in candidates:
+                continue  # No draftable (non-avoid) players left
+            best_player = candidates[position]
             league_copy = league.model_copy(deep=True)
             draft_player(best_player.name, league_copy)
             simulate_draft(league_copy, draft_pick_model)
@@ -451,6 +569,8 @@ def monte_carlo_draft(
             round(sum(samples) / len(samples), 2) if samples else 0.0
         )
     results["iterations"] = i
+    results["suggested"] = suggested
+    results["homer_checks"] = homer_checks
     return MonteCarloSimulationResult(**results)
 
 
@@ -469,6 +589,193 @@ def compute_draft_results(league: League) -> dict:
         ]
         results[team.name] = round(sum(points) / len(points), 2)
     return results
+
+
+def scarcity_analysis(
+    league: League,
+    seconds: float = 10,
+    max_iterations: int = 250,
+) -> ScarcityReport:
+    """
+    Tier-depletion scarcity engine (A1): Monte Carlo availability at the
+    simulator's next pick, and a reach-vs-wait call per position.
+
+    Each iteration simulates the opponents' picks between now and the
+    simulator's next-after-upcoming pick with the same machinery real
+    simulated drafts use (logistic position model + owner tendencies).
+    The simulator's own slot is skipped without removing a player: the
+    question is "what survives if I wait", and in that branch whichever
+    player the simulator takes is by definition not the one being
+    evaluated, so no removal is the exact counterfactual.
+    """
+    simulator_team = [i for i, team in enumerate(league.teams) if team.simulator]
+    if not simulator_team:
+        raise HTTPException(status_code=400, detail="League has no simulator team")
+    simulator = simulator_team[0]
+    simulator_slots = [
+        i for i, team_index in enumerate(league.draft_order) if team_index == simulator
+    ]
+    if not simulator_slots:
+        raise HTTPException(
+            status_code=400, detail="Simulator team has no remaining picks"
+        )
+
+    # Slot t1 is the simulator's upcoming pick (0 = on the clock now);
+    # slot t2 is the decision horizon — where "wait" would next pay off
+    t1 = simulator_slots[0]
+    t2 = simulator_slots[1] if len(simulator_slots) > 1 else None
+    final_pick = t2 is None
+    horizon = t1 if final_pick else t2
+    current_pick = league.current_draft_turn + 1
+
+    draft_pick_model = fit_logistic_regression_model(
+        league.logistic_regression_variables
+    )
+
+    # The active and next tier per position are fixed by the current
+    # pool, so their membership can be resolved before simulating.
+    # Avoid-tagged players (A4) aren't options for the user, so they
+    # don't count toward tier depth — but they stay in the simulated
+    # pool, where opponents draft them normally
+    pools = {
+        position: [
+            player
+            for player in getattr(league.players, position)
+            if player.drafted == False and player.tag != "avoid"
+        ]
+        for position in SCARCITY_POSITIONS
+    }
+    tiers = {position: tier_breakdown(pools[position]) for position in pools}
+    tier_names = {
+        position: {player.name for player in tiers[position][1]}
+        for position in pools
+    }
+    next_tier_names = {
+        position: {player.name for player in tiers[position][3]}
+        for position in pools
+    }
+    candidates = set().union(*tier_names.values(), *next_tier_names.values())
+
+    # Monte Carlo availability: per-player survival counts at both
+    # checkpoints, plus per-position "at least one active-tier player
+    # survived" counts (a joint outcome marginals can't reconstruct)
+    survive_at_pick = {name: 0 for name in candidates}
+    survive_at_next = {name: 0 for name in candidates}
+    any_at_pick = {position: 0 for position in pools}
+    any_at_next = {position: 0 for position in pools}
+    iterations = 0
+    start_time = time.time()
+    while horizon > 0 and iterations < max_iterations:
+        league_copy = league.model_copy(deep=True)
+        picked = []
+        for _ in range(horizon):
+            if league_copy.draft_order[0] == simulator:
+                # Skip the simulator's slot: assignment re-validation
+                # advances draft_order without removing a player
+                league_copy.current_draft_turn += 1
+            else:
+                name = simulate_pick(league_copy, draft_pick_model)
+                draft_player(name, league_copy)
+                picked.append(name)
+
+        # Slots before t1 are all opponents, so the first t1 picks are
+        # exactly the players gone by the simulator's upcoming pick
+        gone_at_pick = set(picked[:t1])
+        gone_at_next = set(picked)
+        for name in candidates:
+            if name not in gone_at_pick:
+                survive_at_pick[name] += 1
+            if name not in gone_at_next:
+                survive_at_next[name] += 1
+        for position in pools:
+            if tier_names[position] - gone_at_pick:
+                any_at_pick[position] += 1
+            if tier_names[position] - gone_at_next:
+                any_at_next[position] += 1
+        iterations += 1
+        if time.time() - start_time > seconds:
+            break
+
+    def probability(counter, name):
+        # With nothing simulated (on the clock at the final pick, or a
+        # zero horizon) every player is deterministically still here
+        return counter[name] / iterations if iterations else 1.0
+
+    positions = []
+    for position in SCARCITY_POSITIONS:
+        tier, tier_players, next_tier, next_tier_players = tiers[position]
+        remaining_now = len(tier_players)
+        expected_at_pick = sum(
+            probability(survive_at_pick, player.name) for player in tier_players
+        )
+        expected_at_next = sum(
+            probability(survive_at_next, player.name) for player in tier_players
+        )
+        prob_at_pick = (
+            any_at_pick[position] / iterations if iterations else float(remaining_now > 0)
+        )
+        prob_at_next = (
+            any_at_next[position] / iterations if iterations else float(remaining_now > 0)
+        )
+        call, message = scarcity_call(
+            position=position,
+            tier=tier,
+            remaining_now=remaining_now,
+            expected_at_next_pick=expected_at_next,
+            prob_tier_at_next_pick=prob_at_next,
+            next_tier=next_tier,
+            next_tier_remaining_now=len(next_tier_players),
+            final_pick=final_pick,
+        )
+        positions.append(
+            PositionScarcity(
+                position=position,
+                call=call,
+                message=message,
+                tier=tier,
+                remaining_now=remaining_now,
+                expected_at_pick=round(expected_at_pick, 2),
+                expected_at_next_pick=round(expected_at_next, 2),
+                prob_tier_at_pick=round(prob_at_pick, 4),
+                prob_tier_at_next_pick=round(prob_at_next, 4),
+                next_tier=next_tier,
+                next_tier_remaining_now=len(next_tier_players),
+                next_tier_expected_at_next_pick=round(
+                    sum(
+                        probability(survive_at_next, player.name)
+                        for player in next_tier_players
+                    ),
+                    2,
+                ),
+                at_risk=[
+                    PlayerAvailability(
+                        name=player.name,
+                        tier=tier,
+                        projected_points=player.points[
+                            max(player.points)
+                        ].projected_points,
+                        survival_at_pick=round(
+                            probability(survive_at_pick, player.name), 4
+                        ),
+                        survival_at_next_pick=round(
+                            probability(survive_at_next, player.name), 4
+                        ),
+                    )
+                    for player in tier_players[:AT_RISK_LIMIT]
+                ],
+            )
+        )
+
+    return ScarcityReport(
+        current_pick=current_pick,
+        your_pick=current_pick + t1,
+        your_next_pick=None if final_pick else current_pick + t2,
+        on_the_clock=t1 == 0,
+        final_pick=final_pick,
+        iterations=iterations,
+        elapsed_seconds=round(time.time() - start_time, 2),
+        positions=positions,
+    )
 
 
 # Routes
@@ -665,20 +972,27 @@ async def add_players_to_league(
 
 
 @app.get("/league/{league_id}/player", response_model=Players, tags=["player"])
-async def get_players(league_id: ObjectId, draftable_only: bool = True):
+async def get_players(
+    league_id: ObjectId,
+    draftable_only: bool = True,
+    tag: Union[PlayerTag, None] = None,
+):
     """
-    Get all players in a league
+    Get all players in a league, optionally filtered to drafted status
+    and/or a tag (A3): sleeper, my_guy, avoid
     """
     league = await get_a_league_by_id(league_id)
     players = league.players
 
-    # Before returning the data, filter out drafted players if requested
+    filtered = players.players
     if draftable_only:
-        return Players(
-            players=[p for p in players.players if not p.drafted]
-        )
-    else:
-        return players
+        filtered = [p for p in filtered if not p.drafted]
+    if tag is not None:
+        filtered = [p for p in filtered if p.tag == tag]
+
+    if draftable_only or tag is not None:
+        return Players(players=filtered)
+    return players
 
 
 @app.delete("/league/{league_id}/player", tags=["player"])
@@ -706,6 +1020,36 @@ async def get_player(league_id: ObjectId, player_name: str):
     return player[0]
 
 
+@app.post(
+    "/league/{league_id}/player/{player_name}/tag",
+    response_model=Player,
+    tags=["player"],
+)
+async def tag_player(league_id: ObjectId, player_name: str, tag: PlayerTag):
+    """
+    Set a player's tag (sleeper / my_guy / avoid); replaces any existing tag
+    """
+    league = await get_a_league_by_id(league_id)
+    player = set_player_tag(player_name, tag, league)
+    await engine.save(league)
+    return player
+
+
+@app.delete(
+    "/league/{league_id}/player/{player_name}/tag",
+    response_model=Player,
+    tags=["player"],
+)
+async def untag_player(league_id: ObjectId, player_name: str):
+    """
+    Clear a player's tag
+    """
+    league = await get_a_league_by_id(league_id)
+    player = set_player_tag(player_name, None, league)
+    await engine.save(league)
+    return player
+
+
 async def get_latest_blend(season: int, scoring_format: str) -> BlendedRanking:
     """
     Get the most recently generated blend for a season/format
@@ -714,7 +1058,9 @@ async def get_latest_blend(season: int, scoring_format: str) -> BlendedRanking:
         BlendedRanking,
         (BlendedRanking.season == season)
         & (BlendedRanking.scoring_format == scoring_format),
-        sort=query.desc(BlendedRanking.generated_at),
+        # generated_at is ms-truncated, so blends created back-to-back
+        # tie; id (monotonic within a process) breaks toward the newest
+        sort=(query.desc(BlendedRanking.generated_at), query.desc(BlendedRanking.id)),
     )
     if not blend:
         raise HTTPException(
@@ -1411,8 +1757,25 @@ async def run_monte_carlo_simulation(draft_id: ObjectId):
     draft = await get_a_draft_by_id(draft_id)
     if not draft.league.draft_order:
         raise HTTPException(status_code=400, detail="Draft is complete")
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(process_pool, monte_carlo_draft, draft.league)
+    return await run_pooled(monte_carlo_draft, draft.league)
+
+
+# Tier-depletion scarcity: reach-vs-wait calls for the simulator's next pick
+@app.get(
+    "/draft/{draft_id}/scarcity",
+    response_model=ScarcityReport,
+    tags=["draft"],
+)
+async def get_draft_scarcity(draft_id: ObjectId, seconds: float = 10):
+    """
+    Simulate opponents' picks up to the simulator's next pick and report,
+    per position, tier depletion and whether to reach now or safely wait
+    """
+    draft = await get_a_draft_by_id(draft_id)
+    if not draft.league.draft_order:
+        raise HTTPException(status_code=400, detail="Draft is complete")
+    seconds = max(1.0, min(seconds, 30.0))
+    return await run_pooled(scarcity_analysis, draft.league, seconds)
 
 
 # Get the results of a draft by running each team's randomized points 1000x times

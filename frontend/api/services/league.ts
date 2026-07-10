@@ -1,7 +1,7 @@
 import { createApi, fetchBaseQuery } from "@reduxjs/toolkit/query/react";
 
 import { baseQuery } from "@/api/services/base";
-import { DraftSimple, LeagueSimple } from "@/types";
+import { DraftSimple, LeagueSimple, Player, PlayerTag, Players } from "@/types";
 
 // Url for all league operations
 const leagueUrl = "/league";
@@ -16,6 +16,46 @@ export const leagueApi = createApi({
     getLeagues: builder.query<LeagueSimple[], string>({
       query: () => leagueUrl,
       providesTags: ["League"],
+    }),
+
+    // Players in a league (A3), optionally filtered to a tag: sleeper,
+    // my_guy, avoid. Defaults to draftable (undrafted) players only.
+    getPlayers: builder.query<
+      Players,
+      { id: string; tag?: PlayerTag; draftableOnly?: boolean }
+    >({
+      query: ({ id, tag, draftableOnly }) => ({
+        url: `${leagueUrl}/${id}/player`,
+        params: {
+          ...(draftableOnly !== undefined && {
+            draftable_only: draftableOnly,
+          }),
+          ...(tag !== undefined && { tag }),
+        },
+      }),
+      providesTags: ["League"],
+    }),
+
+    // Set a player's tag; replaces any existing tag (A3)
+    tagPlayer: builder.mutation<
+      Player,
+      { id: string; name: string; tag: PlayerTag }
+    >({
+      query: ({ id, name, tag }) => ({
+        url: `${leagueUrl}/${id}/player/${encodeURIComponent(name)}/tag`,
+        method: "POST",
+        params: { tag },
+      }),
+      invalidatesTags: ["League"],
+    }),
+
+    // Clear a player's tag (A3)
+    untagPlayer: builder.mutation<Player, { id: string; name: string }>({
+      query: ({ id, name }) => ({
+        url: `${leagueUrl}/${id}/player/${encodeURIComponent(name)}/tag`,
+        method: "DELETE",
+      }),
+      invalidatesTags: ["League"],
     }),
 
     // To create a draft for a league, we need to send a POST request to
@@ -163,6 +203,7 @@ export const leagueApi = createApi({
 
 export const {
   useGetLeaguesQuery,
+  useGetPlayersQuery,
   useCreateDraftMutation,
   useCreateLeagueMutation,
   useAddPlayersMutation,
@@ -170,4 +211,6 @@ export const {
   useSyncHistoricalDraftsMutation,
   useAddHistoricalDraftsMutation,
   useAddHistoricalPlayersMutation,
+  useTagPlayerMutation,
+  useUntagPlayerMutation,
 } = leagueApi;

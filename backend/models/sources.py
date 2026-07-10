@@ -85,6 +85,7 @@ class HistoricalPick(Model):
     round_num: int
     round_pick: int
     member_guid: Optional[str] = None  # ESPN's stable owner id
+    owner_display_name: Optional[str] = None  # for humans; GUIDs key the math
     espn_team_id: int
     raw_player_name: str
     canonical_name: Optional[str] = None
@@ -113,6 +114,41 @@ class OwnerProfile(Model):
     total_picks_observed: int = 0
     metrics: dict = {}  # Phase 3: position freq by round bucket, reach stats, ...
     generated_at: Optional[datetime.datetime] = None
+
+
+class HistoricalIngestLog(Model):
+    """
+    One record per attempted (league, season) history fetch, so gaps in
+    20+ years of ESPN data are visible instead of silently assumed away
+    """
+
+    model_config = {"collection": "historical_ingest_log"}
+
+    espn_league_id: int
+    season: int
+    success: bool = True
+    error: Optional[str] = None
+    picks: int = 0
+    keepers: int = 0
+    auction: bool = False  # auction seasons are stored but excluded from profiles
+    position_matched: int = 0  # picks whose position came from historical ADP
+    adp_matched: int = 0  # picks with a historical ADP (reach features)
+    fetched_at: datetime.datetime = ODField(default_factory=datetime.datetime.now)
+
+
+class OwnerAlias(Model):
+    """
+    Merges the same human across ESPN accounts/leagues: any member GUID
+    mapped here contributes its picks to profile_key instead of itself
+    """
+
+    model_config = {"collection": "owner_aliases"}
+
+    member_guid: str
+    profile_key: str
+    display_name: Optional[str] = None
+    note: Optional[str] = None
+    created: datetime.datetime = ODField(default_factory=datetime.datetime.now)
 
 
 class PlayerAlias(Model):

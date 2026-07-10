@@ -18,6 +18,9 @@ import time
 from typing import List
 
 from data_sources import service as ranking_service
+from data_sources.base import SourceFetchError
+from data_sources.espn_history import ingest_league_history
+import profiling
 from models.config import (
     DRAFT_YEAR,
     LOCAL,
@@ -28,7 +31,7 @@ from models.config import (
 )
 from models.player import Player, Players, PlayerPoints
 from models.position import PositionMaxPoints, PositionSizes, PositionTierDistributions
-from models.sources import BlendedRanking
+from models.sources import BlendedRanking, HistoricalPick, OwnerAlias, OwnerProfile
 from models.team import (
     Draft,
     DraftSimple,
@@ -65,6 +68,10 @@ tags_metadata = [
     {
         "name": "rankings",
         "description": "Automated ranking aggregation: fetch external sources, blend them, and sync the blend into a league's players.",
+    },
+    {
+        "name": "owners",
+        "description": "Owner tendency profiling: ingest ESPN historical drafts per owner and build frequency/average tendency profiles.",
     },
 ]
 
@@ -719,6 +726,138 @@ async def get_rankings_status(
     staleness age, and what the current blend was built from
     """
     return await ranking_service.source_status(engine, season, scoring_format)
+
+
+@app.post("/owners/ingest/{espn_league_id}", tags=["owners"])
+async def ingest_owner_history(
+    espn_league_id: int, seasons: str = "", rebuild_profiles: bool = True
+):
+    """
+    Pull pick-by-pick draft history for one ESPN league (all discoverable
+    seasons, or a comma-separated subset), backfill historical ADP from
+    FFC, and store per-owner picks. Re-running a season replaces it.
+    Private leagues need ESPN_S2/ESPN_SWID configured.
+    """
+    season_list = [int(s.strip()) for s in seasons.split(",") if s.strip()]
+    try:
+        summary = await ingest_league_history(
+            engine, espn_league_id, seasons=season_list or None
+        )
+    except SourceFetchError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    if rebuild_profiles:
+        summary["profiles"] = await profiling.build_owner_profiles(engine)
+    return summary
+
+
+@app.post("/owners/profiles/rebuild", tags=["owners"])
+async def rebuild_owner_profiles():
+    """
+    Recompute every owner tendency profile from stored historical picks
+    (auction seasons and keeper picks excluded; aliases applied)
+    """
+    return await profiling.build_owner_profiles(engine)
+
+
+@app.get("/owners", tags=["owners"])
+async def list_owners():
+    """
+    Every owner seen in ingested history: identity, coverage, and
+    whether a tendency profile exists — the review surface for deciding
+    which GUIDs to merge via aliases
+    """
+    picks = await engine.find(HistoricalPick)
+    alias_map = await profiling.load_alias_map(engine)
+    profiles = {p.profile_key for p in await engine.find(OwnerProfile)}
+    owners = {}
+    for pick in picks:
+        if not pick.member_guid:
+            continue
+        profile_key = alias_map.get(pick.member_guid, pick.member_guid)
+        entry = owners.setdefault(
+            profile_key,
+            {
+                "profile_key": profile_key,
+                "member_guids": set(),
+                "display_names": set(),
+                "espn_league_ids": set(),
+                "seasons": set(),
+                "picks": 0,
+            },
+        )
+        entry["member_guids"].add(pick.member_guid)
+        if pick.owner_display_name:
+            entry["display_names"].add(pick.owner_display_name)
+        entry["espn_league_ids"].add(pick.espn_league_id)
+        entry["seasons"].add(pick.season)
+        entry["picks"] += 1
+    return sorted(
+        (
+            {
+                "profile_key": entry["profile_key"],
+                "member_guids": sorted(entry["member_guids"]),
+                "display_names": sorted(entry["display_names"]),
+                "espn_league_ids": sorted(entry["espn_league_ids"]),
+                "seasons": sorted(entry["seasons"]),
+                "picks": entry["picks"],
+                "has_profile": entry["profile_key"] in profiles,
+            }
+            for entry in owners.values()
+        ),
+        key=lambda entry: -entry["picks"],
+    )
+
+
+@app.get("/owners/{profile_key}/profile", response_model=OwnerProfile, tags=["owners"])
+async def get_owner_profile(profile_key: str):
+    """
+    One owner's tendency profile — inspectable JSON, so 'does this match
+    how they actually draft' can be eyeballed before Phase 4 ever feeds
+    it to the simulator
+    """
+    profile = await engine.find_one(
+        OwnerProfile, OwnerProfile.profile_key == profile_key
+    )
+    if not profile:
+        raise HTTPException(status_code=404, detail="Owner profile not found")
+    return profile
+
+
+@app.post("/owners/alias", tags=["owners"])
+async def create_owner_alias(
+    member_guid: str,
+    profile_key: str,
+    display_name: str = "",
+    note: str = "",
+    rebuild_profiles: bool = True,
+):
+    """
+    Merge an ESPN member GUID into a profile key (the same human across
+    accounts/leagues/co-owned teams). Re-posting a GUID updates it.
+    """
+    existing = await engine.find_one(
+        OwnerAlias, OwnerAlias.member_guid == member_guid
+    )
+    if existing:
+        existing.profile_key = profile_key
+        existing.display_name = display_name or existing.display_name
+        existing.note = note or existing.note
+        alias = existing
+    else:
+        alias = OwnerAlias(
+            member_guid=member_guid,
+            profile_key=profile_key,
+            display_name=display_name or None,
+            note=note or None,
+        )
+    await engine.save(alias)
+    result = {
+        "member_guid": alias.member_guid,
+        "profile_key": alias.profile_key,
+    }
+    if rebuild_profiles:
+        result["profiles"] = await profiling.build_owner_profiles(engine)
+    return result
 
 
 @app.post("/league/{league_id}/player/sync", response_model=League, tags=["player"])

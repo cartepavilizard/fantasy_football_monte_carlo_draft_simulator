@@ -54,6 +54,7 @@ from models.scarcity import (
     tier_breakdown,
 )
 from models.sources import BlendedRanking, HistoricalPick, OwnerAlias, OwnerProfile
+from models.suggestions import SuggestedPick, suggest_candidate
 from models.team import (
     Draft,
     DraftSimple,
@@ -331,17 +332,32 @@ def simulate_pick(
     weights = {k.lower(): v for k, v in weights.items()}
 
     # Randomly choose which position to pick, based on the weights
+    all_weights = dict(weights)
     positions = list(weights.keys())
     weights = list(weights.values())
+    # A4: avoid is a hard constraint on the simulator team's behavior —
+    # it never drafts its avoids, live or inside rollouts. Soft tags
+    # (my_guy/sleeper) act only at the suggestion surface, never here,
+    # so the Monte Carlo's value estimates stay projection-pure
+    skip_avoids = team.simulator
     position_players = []
     while len(position_players) == 0:
+        # If every position is exhausted only because of the avoid
+        # filter, taking a tagged player beats crashing the draft
+        if not positions and skip_avoids:
+            skip_avoids = False
+            positions = list(all_weights.keys())
+            weights = list(all_weights.values())
+
         # If the total weights are zero, just go random
         # (this can happen at the end of the draft)
         if sum(weights) == 0:
             weights = [1 for _ in positions]
         selection = random.choices(positions, weights=weights)[0]
         position_players = [
-            x for x in getattr(players, selection) if x.drafted == False
+            x
+            for x in getattr(players, selection)
+            if x.drafted == False and not (skip_avoids and x.tag == "avoid")
         ]
 
         # If there are no players left in that position, remove it from the list
@@ -459,19 +475,35 @@ def monte_carlo_draft(
         league.logistic_regression_variables
     )
 
+    # A4: resolve each position's candidate once, tag-aware — avoid
+    # filtered, my_guy tie-break, late-round sleeper boost. Tags act
+    # here at the suggestion surface; inside the rollouts every drafted
+    # player scores raw projections
+    round_num = (
+        league.current_draft_turn // len(league.teams) + 1 if league.teams else 1
+    )
+    candidates = {}
+    suggested = {}
+    for position in results.keys():
+        player, reason = suggest_candidate(
+            league.players.__getattribute__(position),
+            round_num,
+            league.round_size,
+        )
+        if player:
+            candidates[position] = player
+            suggested[position] = SuggestedPick(
+                name=player.name, tag=player.tag, reason=reason
+            )
+
     # Begin the simulation
     start_time = time.time()
     i = 0
     while time.time() - start_time < seconds:
         for position in results.keys():
-            possible_players = [
-                player
-                for player in league.players.__getattribute__(position)
-                if player.drafted == False
-            ]
-            if len(possible_players) == 0:
-                continue  # No players left; average the samples we have
-            best_player = possible_players[0]
+            if position not in candidates:
+                continue  # No draftable (non-avoid) players left
+            best_player = candidates[position]
             league_copy = league.model_copy(deep=True)
             draft_player(best_player.name, league_copy)
             simulate_draft(league_copy, draft_pick_model)
@@ -492,6 +524,7 @@ def monte_carlo_draft(
             round(sum(samples) / len(samples), 2) if samples else 0.0
         )
     results["iterations"] = i
+    results["suggested"] = suggested
     return MonteCarloSimulationResult(**results)
 
 
@@ -554,12 +587,15 @@ def scarcity_analysis(
     )
 
     # The active and next tier per position are fixed by the current
-    # pool, so their membership can be resolved before simulating
+    # pool, so their membership can be resolved before simulating.
+    # Avoid-tagged players (A4) aren't options for the user, so they
+    # don't count toward tier depth — but they stay in the simulated
+    # pool, where opponents draft them normally
     pools = {
         position: [
             player
             for player in getattr(league.players, position)
-            if player.drafted == False
+            if player.drafted == False and player.tag != "avoid"
         ]
         for position in SCARCITY_POSITIONS
     }

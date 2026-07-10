@@ -15,6 +15,10 @@ export type DraftSimple = {
   created: string;
 };
 
+// A player carries at most one tag at a time (A3); mirrors
+// backend/models/player.py PlayerTag
+export type PlayerTag = "sleeper" | "my_guy" | "avoid";
+
 export type Player = {
   name: string;
   position: string;
@@ -25,6 +29,8 @@ export type Player = {
   adp?: number | null;
   consensus_rank?: number | null;
   tier?: number | null;
+  // User-set tag (A3); null/undefined means untagged
+  tag?: PlayerTag | null;
 };
 
 export type Players = {
@@ -55,6 +61,14 @@ export type Draft = DraftSimple & {
   league: League;
 };
 
+// The tag-aware player the engine would take at a position, and why
+// (A4); mirrors backend/models/suggestions.py SuggestedPick
+export type SuggestedPick = {
+  name: string;
+  tag: PlayerTag | null;
+  reason: string;
+};
+
 export type MonteCarloResults = {
   qb: number;
   rb: number;
@@ -63,6 +77,7 @@ export type MonteCarloResults = {
   dst: number;
   k: number;
   iterations: number;
+  suggested: Record<string, SuggestedPick>;
 };
 
 // Draft results are just an object of each team name with a number (score) as value

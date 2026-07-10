@@ -660,6 +660,67 @@ async def get_blended_rankings(
     return await get_latest_blend(season, scoring_format)
 
 
+@app.post("/rankings/udk", tags=["rankings"])
+async def upload_udk_rankings(
+    file: UploadFile = File(...),
+    season: int = DRAFT_YEAR,
+    scoring_format: str = SCORING_FORMAT,
+):
+    """
+    Ingest a Fantasy Footballers Ultimate Draft Kit CSV export — the
+    deliberate file-drop source (login-walled paid content is not
+    scraped). Player names resolve against the stored anchor namespace,
+    so run POST /rankings/refresh at least once before uploading; the
+    blend is regenerated immediately to include the upload.
+    """
+    from data_sources.udk import parse_udk_rows
+    from models.sources import SourceRankingBatch
+
+    rows = read_csv_upload(await file.read(), set())
+    records, problems = parse_udk_rows(rows)
+    if problems:
+        raise HTTPException(
+            status_code=422, detail=f"UDK export not usable: {problems}"
+        )
+    batch = SourceRankingBatch(
+        source="udk",
+        season=season,
+        scoring_format=scoring_format,
+        fetched_at=datetime.now(),
+        success=True,
+        records=[
+            {
+                "raw_name": record.raw_name,
+                "position": record.position,
+                "nfl_team": record.nfl_team,
+                "rank": record.rank,
+                "position_rank": record.position_rank,
+                "tier": record.tier,
+                "projection": record.projection,
+            }
+            for record in records
+        ],
+    )
+    summary = await ranking_service.ingest_push_batch(engine, batch)
+    if not summary["batch"]["anchored"]:
+        summary["warning"] = (
+            "No anchor rankings stored yet, so no names could be resolved; "
+            "POST /rankings/refresh, then re-upload this file"
+        )
+    return summary
+
+
+@app.get("/rankings/status", tags=["rankings"])
+async def get_rankings_status(
+    season: int = DRAFT_YEAR, scoring_format: str = SCORING_FORMAT
+):
+    """
+    Per-source freshness and configuration: last attempt, last success,
+    staleness age, and what the current blend was built from
+    """
+    return await ranking_service.source_status(engine, season, scoring_format)
+
+
 @app.post("/league/{league_id}/player/sync", response_model=League, tags=["player"])
 async def sync_players_from_blended_rankings(
     league_id: ObjectId, scoring_format: str = SCORING_FORMAT

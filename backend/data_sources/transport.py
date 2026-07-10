@@ -37,6 +37,10 @@ class Transport(Protocol):
         self, url: str, *, params: Optional[dict] = None, headers: Optional[dict] = None
     ) -> TransportResponse: ...
 
+    async def post(
+        self, url: str, *, data: Optional[dict] = None, headers: Optional[dict] = None
+    ) -> TransportResponse: ...
+
     async def aclose(self) -> None: ...
 
 
@@ -66,6 +70,16 @@ class HttpxTransport:
     async def get(self, url, *, params=None, headers=None) -> TransportResponse:
         response = await self._client_instance().get(
             url, params=params, headers=headers
+        )
+        return TransportResponse(
+            status_code=response.status_code,
+            text=response.text,
+            url=str(response.url),
+        )
+
+    async def post(self, url, *, data=None, headers=None) -> TransportResponse:
+        response = await self._client_instance().post(
+            url, data=data, headers=headers
         )
         return TransportResponse(
             status_code=response.status_code,

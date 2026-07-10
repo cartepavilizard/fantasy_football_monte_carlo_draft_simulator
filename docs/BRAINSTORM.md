@@ -205,3 +205,13 @@ flags — not enforce as hard rules**:
   committed backlog or build order.
 - Phasing relative to the **owner-tendency** and **ranking-aggregation**
   work already underway will be decided in a follow-up discussion.
+- **Model-routing assessment (required in the eventual plan):** when this
+  brainstorm is broken into a phased execution plan, every phase/task must
+  include an explicit recommendation for whether it needs a frontier model
+  or can be routed to a cheaper/faster model. Candidates for cheaper-model
+  routing include boilerplate CRUD endpoints, simple data transformation
+  scripts, repetitive adapter code, and straightforward test scaffolding.
+  Keep the frontier model on work involving architectural decisions,
+  tricky algorithmic logic (e.g., lineup optimization, trade grading),
+  cross-cutting integrations, and anything ambiguity-heavy. Call these
+  recommendations out task by task in the plan document itself.

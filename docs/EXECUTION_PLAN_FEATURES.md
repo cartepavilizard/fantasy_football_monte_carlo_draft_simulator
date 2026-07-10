@@ -77,6 +77,14 @@ Extends the existing draft simulator. No new external data required.
 scarcity nudges active; existing 18+ test suite still green; new tests for
 A1/A3/A4.
 
+**✅ Phase A complete (2026-07-10).** Exit criteria verified by
+`backend/tests/test_phase_a_exit.py`: a full 196-pick mock draft on the
+shipped sample CSVs, driven through the real pick endpoint with tags set,
+checkpointing scarcity nudges (on-the-clock and final-pick), tag-aware
+suggestions, and homer checks along the way. Suite fully green (175
+tests), including a fix for HTTPException failing to pickle out of the
+process pool.
+
 ---
 
 ## Phase B — In-Season Foundations: ESPN League Sync (Aug → Sep 1)

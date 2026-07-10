@@ -149,6 +149,39 @@ app.add_middleware(
 
 
 # Helper functions
+class WorkerHTTPError(Exception):
+    """
+    Picklable stand-in for HTTPException across the process-pool
+    boundary: HTTPException itself fails to unpickle (its __init__
+    requires status_code), which kills the whole pool with
+    BrokenProcessPool instead of surfacing the error
+    """
+
+    def __init__(self, status_code: int, detail: str):
+        super().__init__(status_code, detail)
+        self.status_code = status_code
+        self.detail = detail
+
+
+def run_in_worker(fn, *args):
+    """Run a pool-executed function, converting HTTPException to a
+    picklable error the endpoint can convert back"""
+    try:
+        return fn(*args)
+    except HTTPException as exc:
+        raise WorkerHTTPError(exc.status_code, exc.detail) from None
+
+
+async def run_pooled(fn, *args):
+    """Submit CPU-bound work to the process pool and restore any
+    HTTPException the worker raised"""
+    loop = asyncio.get_running_loop()
+    try:
+        return await loop.run_in_executor(process_pool, run_in_worker, fn, *args)
+    except WorkerHTTPError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+
+
 async def get_a_league_by_id(league_id: ObjectId) -> League:
     """
     Get a league by its ID
@@ -1724,8 +1757,7 @@ async def run_monte_carlo_simulation(draft_id: ObjectId):
     draft = await get_a_draft_by_id(draft_id)
     if not draft.league.draft_order:
         raise HTTPException(status_code=400, detail="Draft is complete")
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(process_pool, monte_carlo_draft, draft.league)
+    return await run_pooled(monte_carlo_draft, draft.league)
 
 
 # Tier-depletion scarcity: reach-vs-wait calls for the simulator's next pick
@@ -1743,10 +1775,7 @@ async def get_draft_scarcity(draft_id: ObjectId, seconds: float = 10):
     if not draft.league.draft_order:
         raise HTTPException(status_code=400, detail="Draft is complete")
     seconds = max(1.0, min(seconds, 30.0))
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(
-        process_pool, scarcity_analysis, draft.league, seconds
-    )
+    return await run_pooled(scarcity_analysis, draft.league, seconds)
 
 
 # Get the results of a draft by running each team's randomized points 1000x times

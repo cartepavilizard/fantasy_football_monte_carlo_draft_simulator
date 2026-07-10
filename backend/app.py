@@ -22,6 +22,7 @@ from data_sources.base import SourceFetchError
 from data_sources.espn_history import ingest_league_history
 import backtest as backtest_module
 import profiling
+from scheduler import RankingsScheduler
 from models import config as app_config
 from models.tendencies import (
     MISS_ADP_AFTER,
@@ -106,6 +107,19 @@ engine = AIOEngine(
 # Monte Carlo simulations are CPU-bound; run them in a separate process so
 # they don't hold the GIL and starve other requests for their ~30s duration
 process_pool = ProcessPoolExecutor(max_workers=2)
+
+# Scheduled rankings refresh (enabled/paced via env and /rankings/schedule)
+rankings_scheduler = RankingsScheduler(lambda: engine)
+
+
+@app.on_event("startup")
+async def start_rankings_scheduler():
+    rankings_scheduler.start()
+
+
+@app.on_event("shutdown")
+async def stop_rankings_scheduler():
+    await rankings_scheduler.stop()
 
 
 # Include origins for CORS
@@ -800,6 +814,85 @@ async def get_rankings_status(
     staleness age, and what the current blend was built from
     """
     return await ranking_service.source_status(engine, season, scoring_format)
+
+
+@app.get("/rankings/schedule", tags=["rankings"])
+async def get_rankings_schedule():
+    """
+    The scheduled-refresh state: enabled, interval, next/last run, and
+    the last run's outcome
+    """
+    return rankings_scheduler.status()
+
+
+@app.post("/rankings/schedule", tags=["rankings"])
+async def set_rankings_schedule(
+    enabled: bool = None, interval_hours: float = None
+):
+    """
+    Runtime control of the scheduled refresh. The draft-day switch is
+    enabled=false — nothing scheduled ever races a live draft; manual
+    POST /rankings/refresh keeps working while paused.
+    """
+    try:
+        rankings_scheduler.configure(
+            enabled=enabled, interval_hours=interval_hours
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return rankings_scheduler.status()
+
+
+@app.post(
+    "/league/{league_id}/historical_draft/sync",
+    response_model=League,
+    tags=["historical_draft"],
+)
+async def sync_historical_drafts_from_espn(
+    league_id: ObjectId, espn_league_id: int
+):
+    """
+    Train the opponent-pick regression from ingested ESPN draft history
+    instead of a CSV: uses every non-keeper pick with a known position
+    from that league's snake (non-auction) seasons. Replaces existing
+    regression data on re-run.
+    """
+    league = await get_a_league_by_id(league_id)
+    picks = list(
+        await engine.find(
+            HistoricalPick, HistoricalPick.espn_league_id == espn_league_id
+        )
+    )
+    if not picks:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No ingested history for ESPN league {espn_league_id}; "
+                "POST /owners/ingest/{espn_league_id} first"
+            ),
+        )
+    auction_seasons = {pick.season for pick in picks if pick.bid_amount}
+    usable = [
+        pick
+        for pick in picks
+        if pick.season not in auction_seasons
+        and pick.position
+        and not pick.is_keeper
+    ]
+    if not usable:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Ingested history has no usable picks (snake seasons with "
+                "matched positions); check /owners ingest logs"
+            ),
+        )
+    league.logistic_regression_variables = LogisticRegressionVariables(
+        x=[pick.overall_pick for pick in usable],
+        y=[pick.position for pick in usable],
+    )
+    await engine.save(league)
+    return league
 
 
 @app.post("/owners/ingest/{espn_league_id}", tags=["owners"])

@@ -55,6 +55,16 @@ DATA_SOURCE_CACHE_TTL_SECONDS = float(
 # leagues with mapped owners — the A/B switch is this one env var.
 USE_OWNER_PROFILES = os.getenv("USE_OWNER_PROFILES", "true").lower() == "true"
 
+# Scheduled rankings refresh (Phase 5). Off by default so dev/test runs
+# never fetch on their own; docker-compose turns it on for the deployed
+# app. Runtime pause/resume via POST /rankings/schedule (draft-day switch).
+RANKINGS_REFRESH_ENABLED = (
+    os.getenv("RANKINGS_REFRESH_ENABLED", "false").lower() == "true"
+)
+RANKINGS_REFRESH_INTERVAL_HOURS = float(
+    os.getenv("RANKINGS_REFRESH_INTERVAL_HOURS", 24)
+)
+
 # Ranking aggregation settings (Phase 1)
 SCORING_FORMAT = os.getenv("SCORING_FORMAT", "ppr")  # standard | half_ppr | ppr
 try:

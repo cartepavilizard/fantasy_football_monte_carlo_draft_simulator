@@ -21,12 +21,7 @@ const positions = ["qb", "rb", "wr", "te", "dst", "k"];
 type Position = (typeof positions)[number];
 type PositionColorMap = {
   [key in Position]:
-    | "primary"
-    | "success"
-    | "warning"
-    | "danger"
-    | "secondary"
-    | "default";
+    "primary" | "success" | "warning" | "danger" | "secondary" | "default";
 };
 
 const positionColors: PositionColorMap = {
@@ -307,6 +302,25 @@ export default function DraftIdPage({ params }: { params: { id: string } }) {
                               {player.nfl_team} |{" "}
                               {player.position_tier.toLocaleUpperCase()}
                             </p>
+                            {(player.adp != null ||
+                              player.consensus_rank != null ||
+                              player.tier != null) && (
+                              <p className="text-xs opacity-80">
+                                {[
+                                  player.adp != null
+                                    ? `ADP ${Math.round(player.adp)}`
+                                    : null,
+                                  player.consensus_rank != null
+                                    ? `ECR ${Math.round(player.consensus_rank)}`
+                                    : null,
+                                  player.tier != null
+                                    ? `Tier ${player.tier}`
+                                    : null,
+                                ]
+                                  .filter(Boolean)
+                                  .join(" | ")}
+                              </p>
+                            )}
                           </Button>
                         </li>
                       );

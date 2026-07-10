@@ -15,6 +15,8 @@ import {
   useAddHistoricalDraftsMutation,
   useAddHistoricalPlayersMutation,
   useAddPlayersMutation,
+  useSyncHistoricalDraftsMutation,
+  useSyncPlayersMutation,
 } from "@/api/services/league";
 import { title, subtitle } from "@/components/primitives";
 import { LeagueSimple } from "@/types";
@@ -59,6 +61,8 @@ export default function SetupPage() {
   const [addHistoricalDrafts] = useAddHistoricalDraftsMutation();
   const [addHistoricalPlayers] = useAddHistoricalPlayersMutation();
   const [addPlayers] = useAddPlayersMutation();
+  const [syncPlayers] = useSyncPlayersMutation();
+  const [syncHistoricalDrafts] = useSyncHistoricalDraftsMutation();
 
   // State to store the name, sizes, and files
   const [leagueName, setLeagueName] = useState<string | null>(null);
@@ -69,6 +73,12 @@ export default function SetupPage() {
   const [playersFile, setPlayersFile] = useState<File | null>(null);
   const [historicalPlayersFile, setHistoricalPlayersFile] =
     useState<File | null>(null);
+
+  // No-CSV paths: players from the blended rankings, and the opponent
+  // model from ingested ESPN draft history
+  const [playersFromSources, setPlayersFromSources] = useState<boolean>(false);
+  const [useEspnHistory, setUseEspnHistory] = useState<boolean>(false);
+  const [espnLeagueId, setEspnLeagueId] = useState<string>("");
 
   // Optional league settings; blank means "use the backend's default"
   const [roundSize, setRoundSize] = useState<string>("");
@@ -104,7 +114,8 @@ export default function SetupPage() {
       if (row["roster size"]) setRosterSize(row["roster size"]);
       if (row["snake draft"]) {
         setSnakeDraft(
-          row["snake draft"].toLowerCase() === "true" || row["snake draft"] === "1",
+          row["snake draft"].toLowerCase() === "true" ||
+            row["snake draft"] === "1",
         );
       }
       if (row["qb"]) setQbSize(row["qb"]);
@@ -128,9 +139,11 @@ export default function SetupPage() {
       case 2:
         return teamsFile !== null;
       case 3:
-        return historicalDraftFile !== null;
+        return useEspnHistory
+          ? espnLeagueId !== ""
+          : historicalDraftFile !== null;
       case 4:
-        return playersFile !== null;
+        return playersFromSources || playersFile !== null;
       case 5:
         return historicalPlayersFile !== null;
       default:
@@ -171,24 +184,43 @@ export default function SetupPage() {
         return {} as LeagueSimple;
       });
 
-    await addHistoricalDrafts({
-      id: newLeague.id,
-      drafts: historicalDraftFile as File,
-    }).catch(() => {
-      setIsCreationError(true);
-    });
+    if (useEspnHistory) {
+      await syncHistoricalDrafts({
+        id: newLeague.id,
+        espnLeagueId: Number(espnLeagueId),
+      })
+        .unwrap()
+        .catch(() => {
+          setIsCreationError(true);
+        });
+    } else {
+      await addHistoricalDrafts({
+        id: newLeague.id,
+        drafts: historicalDraftFile as File,
+      }).catch(() => {
+        setIsCreationError(true);
+      });
+    }
     await addHistoricalPlayers({
       id: newLeague.id,
       players: historicalPlayersFile as File,
     }).catch(() => {
       setIsCreationError(true);
     });
-    await addPlayers({
-      id: newLeague.id,
-      players: playersFile as File,
-    }).catch(() => {
-      setIsCreationError(true);
-    });
+    if (playersFromSources) {
+      await syncPlayers({ id: newLeague.id })
+        .unwrap()
+        .catch(() => {
+          setIsCreationError(true);
+        });
+    } else {
+      await addPlayers({
+        id: newLeague.id,
+        players: playersFile as File,
+      }).catch(() => {
+        setIsCreationError(true);
+      });
+    }
     setIsCreated(true);
   }, [
     createLeague,
@@ -197,6 +229,11 @@ export default function SetupPage() {
     historicalDraftFile,
     historicalPlayersFile,
     playersFile,
+    playersFromSources,
+    useEspnHistory,
+    espnLeagueId,
+    syncPlayers,
+    syncHistoricalDrafts,
     roundSize,
     rosterSize,
     snakeDraft,
@@ -307,8 +344,8 @@ export default function SetupPage() {
             <p className="text-left w-full">
               Upload a CSV to fill in the fields below instead of typing them
               in. To see a template of this file, please{" "}
-              <Link href="/settings.csv">click here</Link>. Fields stay
-              editable after upload.
+              <Link href="/settings.csv">click here</Link>. Fields stay editable
+              after upload.
             </p>
             <div className="flex gap-4 w-full">
               <Input
@@ -436,46 +473,92 @@ export default function SetupPage() {
         {/* Step 4 */}
         {progressStep === 3 && (
           <div className="flex flex-col gap-4 w-full items-center">
-            <Input
-              id="historical-drafts-csv"
-              label="Historical Drafts CSV"
-              size="lg"
-              type="file"
-              variant={theme === "light" ? "faded" : "flat"}
-              onChange={(e) => {
-                if (!e.target.files) {
-                  return;
-                } else setHistoricalDraftFile(e.target.files[0]);
-              }}
-            />
-            <p className="text-left">
-              This CSV file records the round-by-round outcomes of previous
-              drafts for your league. To see a template of this file, please{" "}
-              <Link href="/historical_drafts.csv">click here</Link>.
-            </p>
+            <div className="flex items-center gap-4 w-full">
+              <span>Use ingested ESPN draft history</span>
+              <Switch
+                isSelected={useEspnHistory}
+                onValueChange={setUseEspnHistory}
+              />
+            </div>
+            {useEspnHistory ? (
+              <>
+                <Input
+                  id="espn-league-id"
+                  label="ESPN League ID"
+                  size="lg"
+                  type="number"
+                  value={espnLeagueId}
+                  variant={theme === "light" ? "faded" : "flat"}
+                  onChange={(e) => setEspnLeagueId(e.target.value)}
+                />
+                <p className="text-left w-full">
+                  The opponent model will train on the pick-by-pick history
+                  already ingested for this ESPN league — no CSV needed. Run the
+                  owner ingest for the league first.
+                </p>
+              </>
+            ) : (
+              <>
+                <Input
+                  id="historical-drafts-csv"
+                  label="Historical Drafts CSV"
+                  size="lg"
+                  type="file"
+                  variant={theme === "light" ? "faded" : "flat"}
+                  onChange={(e) => {
+                    if (!e.target.files) {
+                      return;
+                    } else setHistoricalDraftFile(e.target.files[0]);
+                  }}
+                />
+                <p className="text-left">
+                  This CSV file records the round-by-round outcomes of previous
+                  drafts for your league. To see a template of this file, please{" "}
+                  <Link href="/historical_drafts.csv">click here</Link>.
+                </p>
+              </>
+            )}
           </div>
         )}
 
         {/* Step 5 */}
         {progressStep === 4 && (
           <div className="flex flex-col gap-4 w-full items-center">
-            <Input
-              id="players-csv"
-              label="Players CSV"
-              size="lg"
-              type="file"
-              variant={theme === "light" ? "faded" : "flat"}
-              onChange={(e) => {
-                if (!e.target.files) {
-                  return;
-                } else setPlayersFile(e.target.files[0]);
-              }}
-            />
-            <p className="text-left">
-              This CSV file lists current players and their projected fantasy
-              football points. To see a template of this file, please{" "}
-              <Link href="/players.csv">click here</Link>.
-            </p>
+            <div className="flex items-center gap-4 w-full">
+              <span>Build players from blended rankings</span>
+              <Switch
+                isSelected={playersFromSources}
+                onValueChange={setPlayersFromSources}
+              />
+            </div>
+            {playersFromSources ? (
+              <p className="text-left w-full">
+                Players and projections will come from the automatically blended
+                ranking sources — no CSV needed. Check the{" "}
+                <Link href="/sources">Sources page</Link> to refresh the blend
+                and see per-source freshness first.
+              </p>
+            ) : (
+              <>
+                <Input
+                  id="players-csv"
+                  label="Players CSV"
+                  size="lg"
+                  type="file"
+                  variant={theme === "light" ? "faded" : "flat"}
+                  onChange={(e) => {
+                    if (!e.target.files) {
+                      return;
+                    } else setPlayersFile(e.target.files[0]);
+                  }}
+                />
+                <p className="text-left">
+                  This CSV file lists current players and their projected
+                  fantasy football points. To see a template of this file,
+                  please <Link href="/players.csv">click here</Link>.
+                </p>
+              </>
+            )}
           </div>
         )}
 

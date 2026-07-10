@@ -34,6 +34,20 @@ services:
     environment:
       - LOCAL=false
       - DRAFT_YEAR=2024  # must match the Season column in your players CSV
+      # Scheduled source refresh: daily off-season; tighten (e.g. 6) in
+      # August. Pause on draft day via POST /rankings/schedule?enabled=false
+      - RANKINGS_REFRESH_ENABLED=true
+      - RANKINGS_REFRESH_INTERVAL_HOURS=24
+      # Source credentials are read from .env / the host environment:
+      # ESPN_S2, ESPN_SWID, ESPN_LEAGUE_IDS, YAHOO_CLIENT_ID,
+      # YAHOO_CLIENT_SECRET, YAHOO_REFRESH_TOKEN, FANTASYPROS_API_KEY
+      - ESPN_S2=${ESPN_S2:-}
+      - ESPN_SWID=${ESPN_SWID:-}
+      - ESPN_LEAGUE_IDS=${ESPN_LEAGUE_IDS:-}
+      - YAHOO_CLIENT_ID=${YAHOO_CLIENT_ID:-}
+      - YAHOO_CLIENT_SECRET=${YAHOO_CLIENT_SECRET:-}
+      - YAHOO_REFRESH_TOKEN=${YAHOO_REFRESH_TOKEN:-}
+      - FANTASYPROS_API_KEY=${FANTASYPROS_API_KEY:-}
     ports:
       - 8000:8000
     depends_on:

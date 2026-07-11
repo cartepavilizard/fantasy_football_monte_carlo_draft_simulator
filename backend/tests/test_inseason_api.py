@@ -221,6 +221,7 @@ def test_every_inseason_get_serves_with_the_network_rigged_to_explode(
         f"/inseason/league/{LEAGUE_ID}/locks",
         f"/inseason/league/{LEAGUE_ID}/lineup?espn_team_id=1",
         "/inseason/matchup_strength",
+        "/inseason/usage_shifts?week=5",
         "/notifications",
         "/notifications/pending",
     ]:

@@ -33,6 +33,7 @@ from odmantic import query
 from models.config import DRAFT_YEAR
 from models.lineup import optimize_lineup
 from models.matchup_strength import defense_position_strength
+from models.usage_shifts import detect_usage_shifts
 from models.inseason import (
     FreeAgentSnapshot,
     InSeasonLeague,
@@ -287,6 +288,23 @@ async def get_matchup_strength(
             )
         strength["positions"] = {wanted: strength["positions"][wanted]}
     return strength
+
+
+@router.get("/usage_shifts")
+async def get_usage_shifts(week: int, season: int = DRAFT_YEAR):
+    """
+    Every meaningful usage shift for one NFL week (C4) — snap-share and
+    target-share moves vs each player's trailing baseline, straight
+    from the ingested PlayerWeekUsage rows in Mongo. League-independent;
+    the notification path additionally filters to rostered/free-agent
+    players, but this read returns them all for the trends view.
+    """
+    engine = _engine()
+    return {
+        "season": season,
+        "week": week,
+        "shifts": await detect_usage_shifts(engine, season, week),
+    }
 
 
 @router.get("/league/{espn_league_id}/locks")

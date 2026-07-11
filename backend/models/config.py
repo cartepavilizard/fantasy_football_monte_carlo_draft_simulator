@@ -146,6 +146,22 @@ except (ValueError, AttributeError):
 EARLY_LOCK_LEAD_HOURS = float(os.getenv("EARLY_LOCK_LEAD_HOURS", 36))
 LOCK_FLEX_MARGIN_POINTS = float(os.getenv("LOCK_FLEX_MARGIN_POINTS", 1.0))
 
+# Usage-shift detection (Phase C, task C4). A shift is CURRENT week vs
+# the mean of up to USAGE_BASELINE_MAX_WEEKS prior weeks (at least
+# USAGE_BASELINE_MIN_WEEKS of data, so the first possible alert is
+# week 3 — one week is noise, not a baseline). Thresholds are absolute
+# share-point moves; the floors ignore bottom-of-roster churn (a 3%->9%
+# snap player is nobody's pickup). See models/usage_shifts.py for why
+# these specific numbers.
+USAGE_SNAP_SHIFT_THRESHOLD = float(os.getenv("USAGE_SNAP_SHIFT_THRESHOLD", 0.12))
+USAGE_TARGET_SHIFT_THRESHOLD = float(
+    os.getenv("USAGE_TARGET_SHIFT_THRESHOLD", 0.07)
+)
+USAGE_BASELINE_MAX_WEEKS = int(os.getenv("USAGE_BASELINE_MAX_WEEKS", 4))
+USAGE_BASELINE_MIN_WEEKS = int(os.getenv("USAGE_BASELINE_MIN_WEEKS", 2))
+USAGE_SNAP_FLOOR = float(os.getenv("USAGE_SNAP_FLOOR", 0.15))
+USAGE_TARGET_FLOOR = float(os.getenv("USAGE_TARGET_FLOOR", 0.10))
+
 # Ranking aggregation settings (Phase 1)
 SCORING_FORMAT = os.getenv("SCORING_FORMAT", "ppr")  # standard | half_ppr | ppr
 try:

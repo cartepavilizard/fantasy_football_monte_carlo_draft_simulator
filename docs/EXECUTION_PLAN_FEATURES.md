@@ -110,6 +110,19 @@ B5's live Claude Routine, then a live sync test against the three real
 leagues (`ESPN_S2`/`ESPN_SWID`/`ESPN_LEAGUE_IDS` are already set) once run
 against an environment with a reachable MongoDB.
 
+**Phase B exit review (2026-07-10):** **Live sync verified against all three
+real leagues** with the env cookies (real ESPN network, in-memory Mongo):
+every section OK — 10/12/12-team leagues, 70/84/84 matchups, 300 free
+agents each, plus the 272-game 2026 pro schedule for lock times; freshness
+clean on all sections; `auth_expired=false`. That closes exit criteria 1–2
+(three leagues syncing; cached-only perspective reads are enforced
+structurally and test-guarded). The one open criterion is the real Claude
+Routine push, which is blocked on deployment, not code: this dev machine
+has no MongoDB or Docker, so the backend cannot run persistently here, and
+a Routine needs the API reachable from where it runs. Decide the hosting
+story (install Docker/Mongo locally vs. a small always-on box) before the
+season — it also gates the B3 scheduler actually running on cadence.
+
 ---
 
 ## Phase C — Lineup & Strategy (Sep, core by week 1)

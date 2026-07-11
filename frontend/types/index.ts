@@ -381,6 +381,230 @@ export type LocksData = {
   locks: WeekLocks | null;
 };
 
+// A defense-vs-position matchup entry (C2); mirrors strength_for()'s
+// return shape in backend/models/matchup_strength.py
+export type MatchupEntry = {
+  multiplier: number;
+  observed_ratio: number | null;
+  weeks_sampled: number;
+  confidence: "none" | "low" | "medium" | "high";
+  rank: number | null;
+};
+
+// One ranked K/DST streaming row (C3); mirrors streaming_recommendations()
+// in backend/models/streaming.py. homer_check is C9's neutral comparison,
+// present only when nfl_team is the homer team (Seahawks).
+export type StreamingRecommendation = {
+  player_id: number;
+  player_name: string;
+  position: string;
+  nfl_team: string | null;
+  opponent: string | null;
+  projected_points: number | null;
+  matchup_adjusted_points: number | null;
+  matchup: MatchupEntry;
+  rank: number;
+  homer_check: HomerCheck | null;
+};
+
+export type StreamingData = {
+  week: number;
+  recommendations: StreamingRecommendation[];
+};
+
+// C8: single-game variance flag — real opportunity (targets) that
+// didn't turn into catches in one game. mirrors variance_note()'s dict
+// shape in backend/models/usage_shifts.py. null unless the game clears
+// the backend's target floor and catch-rate ceiling; the framing text
+// itself lives in the shared VarianceFlag component, not here, since
+// the backend only decides whether a game clears the bar.
+export type UsageVariance = {
+  targets: number;
+  receptions: number;
+  catch_rate: number; // 0..1
+};
+
+// One meaningful usage shift (C4): current-week snap/target share vs a
+// 2-4-week trailing baseline. mirrors detect_usage_shifts()'s dict shape
+// in backend/models/usage_shifts.py. League-independent — GET
+// /inseason/usage_shifts returns these directly, no InSeasonEnvelope.
+export type UsageShift = {
+  player_name: string;
+  position: string | null;
+  nfl_team: string | null;
+  season: number;
+  week: number;
+  metric: "snap_share" | "target_share";
+  metric_phrase: string;
+  current: number; // 0..1
+  baseline: number; // 0..1
+  delta: number; // current - baseline
+  direction: "rising" | "falling";
+  baseline_weeks: number;
+  variance: UsageVariance | null;
+};
+
+export type UsageShiftsData = {
+  season: number;
+  week: number;
+  shifts: UsageShift[];
+};
+
+// C5: one NFL team's playoff-window (weeks 14-16) schedule strength for
+// one position; mirrors playoff_schedule_strength()'s per-team entry in
+// backend/models/playoff_sos.py. score is the SUM of C2's multipliers
+// across scheduled opponents — a bye contributes nothing, not an average
+// pulled toward neutral, so bye_weeks/games_scheduled explain a low score.
+export type PlayoffSosOpponent = {
+  week: number;
+  opponent: string;
+  multiplier: number;
+  confidence: "none" | "low" | "medium" | "high";
+};
+
+export type PlayoffSosEntry = {
+  score: number;
+  games_scheduled: number;
+  bye_weeks: number[];
+  opponents: PlayoffSosOpponent[];
+  confidence: "none" | "low" | "medium" | "high";
+  rank: number;
+};
+
+// One fantasy starter joined against the table above (nfl_team +
+// position) — null playoff_sos means the team has no schedule data yet.
+export type PlayoffSosStarter = {
+  player_name: string;
+  position: string;
+  nfl_team: string | null;
+  lineup_slot: string;
+  playoff_sos: PlayoffSosEntry | null;
+};
+
+export type PlayoffSosRosterTeam = {
+  espn_team_id: number;
+  team_name: string | null;
+  starters: PlayoffSosStarter[];
+  average_rank: number | null;
+};
+
+// GET /inseason/playoff_sos: league-independent by default (positions),
+// `rosters` only present when scoped with espn_league_id. `note` is C2's
+// own early-season "all neutral" note, carried through unchanged.
+export type PlayoffSosData = {
+  season: number;
+  weeks: number[];
+  positions: Record<string, Record<string, PlayoffSosEntry>>;
+  note: string | null;
+  rosters?: PlayoffSosRosterTeam[];
+};
+
+// One roster player as annotated by the lineup optimizer (C1/C2/C6):
+// projections plus C2's matchup tilt and the kickoff used for C6's lock
+// rules. mirrors the `annotated` dict built in optimize_lineup() in
+// backend/models/lineup.py.
+export type LineupPlayer = {
+  player_id: number;
+  player_name: string;
+  position: string | null;
+  nfl_team: string | null;
+  injury_status: string | null;
+  current_slot: string;
+  base_projection: number | null;
+  adjusted_projection: number | null;
+  opponent: string | null;
+  on_bye: boolean;
+  kickoff: string | null;
+  matchup: MatchupEntry;
+};
+
+// One starting slot in the optimal lineup; player is null only when
+// nothing eligible remained to fill it.
+export type LineupSlotEntry = {
+  slot: string;
+  player: LineupPlayer | null;
+};
+
+// One slot change between the current lineup and the optimal one
+export type LineupMove = {
+  player_id: number;
+  player_name: string;
+  from_slot: string;
+  to_slot: string;
+};
+
+// C6 rule 2 (advice only, never auto-applied): a bench alternative that
+// keeps a slot open past an early-locking starter's kickoff, and what
+// it costs in projected points. mirrors lock_advice()'s dict shape in
+// backend/models/lineup.py. start/alternative are player_ids.
+export type LineupLockAdvice = {
+  slot: string;
+  start: number;
+  alternative: number;
+  cost_points: number;
+  note: string;
+};
+
+// GET /inseason/league/{id}/lineup's data (C1): the optimal legal
+// lineup from ESPN weekly projections + C2's matchup tilt, the moves to
+// get there from the current lineup, and C6's lock guidance. mirrors
+// optimize_lineup()'s return dict in backend/models/lineup.py; null
+// when no synced roster exists for that team-week.
+export type LineupData = {
+  week: number;
+  espn_team_id: number;
+  optimal: LineupSlotEntry[];
+  bench: LineupPlayer[];
+  ir: LineupPlayer[];
+  current_total: number;
+  optimal_total: number;
+  delta_points: number;
+  moves: LineupMove[];
+  lock_advice: LineupLockAdvice[];
+  warnings: string[];
+};
+
+// The curated starter -> direct-backup mapping (C7); mirrors HandcuffPair
+// in backend/models/handcuffs.py. source "seed" survives the pre-season
+// curation pass, "manual" once a user edits/repoints/deletes it.
+export type HandcuffPair = {
+  starter_name: string;
+  handcuff_name: string;
+  nfl_team: string | null;
+  position: string;
+  note: string | null;
+  source: "seed" | "manual";
+  active: boolean;
+  updated_at: string;
+};
+
+export type HandcuffSeedResult = {
+  created: number;
+  skipped: number;
+};
+
+// One flagged handcuff for a league-week (C7): a rostered starter whose
+// curated backup is sitting in the free-agent pool. mirrors
+// available_handcuff_flags()'s dict shape in backend/models/handcuffs.py.
+// priority "high" only when the starter is questionable/doubtful/out;
+// homer_check (C9) present only when the handcuff plays for HOMER_TEAM.
+export type HandcuffFlag = {
+  starter_name: string;
+  handcuff_name: string;
+  nfl_team: string | null;
+  starter_team_id: number;
+  starter_injury_status: string | null;
+  handcuff_projected_points: number | null;
+  handcuff_percent_owned: number | null;
+  priority: "high" | "normal";
+  homer_check: HomerCheck | null;
+};
+
+export type HandcuffFlagsData = {
+  week: number;
+  handcuffs: HandcuffFlag[];
+};
+
 // POST /inseason/sync — the one route that talks to ESPN; loose section
 // typing since counts vary (teams/matchups/players/transactions)
 export type SyncSectionResult = {

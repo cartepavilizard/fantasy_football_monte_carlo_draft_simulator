@@ -12,7 +12,8 @@ import inspect
 
 from mongomock_motor import AsyncMongoMockClient
 
-from models.config import DRAFT_YEAR
+from models.config import DRAFT_YEAR, HOMER_TEAM
+from models.handcuffs import upsert_handcuff
 from models.inseason import (
     FreeAgentEntry,
     FreeAgentSnapshot,
@@ -219,6 +220,14 @@ def test_every_inseason_get_serves_with_the_network_rigged_to_explode(
         f"/inseason/league/{LEAGUE_ID}/transactions",
         f"/inseason/league/{LEAGUE_ID}/free_agents",
         f"/inseason/league/{LEAGUE_ID}/locks",
+        f"/inseason/league/{LEAGUE_ID}/lineup?espn_team_id=1",
+        f"/inseason/league/{LEAGUE_ID}/streaming",
+        "/inseason/matchup_strength",
+        "/inseason/playoff_sos",
+        f"/inseason/playoff_sos?espn_league_id={LEAGUE_ID}",
+        "/inseason/usage_shifts?week=5",
+        "/inseason/handcuffs",
+        f"/inseason/league/{LEAGUE_ID}/handcuffs",
         "/notifications",
         "/notifications/pending",
     ]:
@@ -290,6 +299,95 @@ def test_transactions_read(client, app_module):
     (transaction,) = payload["data"]
     assert transaction["espn_transaction_id"] == "txn-1"
     assert transaction["items"][0]["item_type"] == "ADD"
+
+
+def test_streaming_ranks_kdst_free_agents(client, app_module):
+    """C3: the free-agent pool filtered to K/DST, with matchup context.
+    week 5's Chiefs D/ST has no nfl_team recorded in the seed, so its
+    matchup is neutral (multiplier 1.0) — the endpoint still serves it."""
+    seed(app_module)
+    payload = client.get(f"/inseason/league/{LEAGUE_ID}/streaming").json()
+    recs = payload["data"]["recommendations"]
+    assert [r["player_name"] for r in recs] == ["Chiefs D/ST"]
+    assert recs[0]["position"] == "DST"
+    assert recs[0]["matchup"]["multiplier"] == 1.0
+    assert recs[0]["rank"] == 1
+    assert payload["data"]["week"] == 5
+
+
+def test_league_handcuffs_flags_priority_and_homer_check(client, app_module):
+    """C7: a rostered starter whose curated handcuff is a free agent
+    surfaces as a flag; priority "high" when the starter is hurt, and a
+    SEA (HOMER_TEAM) handcuff carries C9's neutral comparison."""
+    seed(app_module)
+    engine = app_module.engine
+
+    async def add_handcuff_fixture():
+        roster = await engine.find_one(
+            TeamWeekRoster,
+            (TeamWeekRoster.espn_league_id == LEAGUE_ID)
+            & (TeamWeekRoster.season == SEASON)
+            & (TeamWeekRoster.week == 5)
+            & (TeamWeekRoster.espn_team_id == 1),
+        )
+        roster.entries.append(
+            RosterSlotEntry(
+                player_id=999,
+                player_name="Kenneth Walker III",
+                position="RB",
+                nfl_team=HOMER_TEAM,
+                lineup_slot="RB",
+                injury_status="questionable",
+                projected_points=12.0,
+            )
+        )
+        await engine.save(roster)
+
+        snapshot = await engine.find_one(
+            FreeAgentSnapshot,
+            (FreeAgentSnapshot.espn_league_id == LEAGUE_ID)
+            & (FreeAgentSnapshot.season == SEASON)
+            & (FreeAgentSnapshot.week == 5),
+        )
+        snapshot.entries.extend(
+            [
+                FreeAgentEntry(
+                    player_id=998,
+                    player_name="Zach Charbonnet",
+                    position="RB",
+                    nfl_team=HOMER_TEAM,
+                    percent_owned=22.5,
+                    projected_points=9.0,
+                ),
+                FreeAgentEntry(
+                    player_id=997,
+                    player_name="Some Other RB",
+                    position="RB",
+                    nfl_team="ATL",
+                    percent_owned=5.0,
+                    projected_points=4.0,
+                ),
+            ]
+        )
+        await engine.save(snapshot)
+
+        await upsert_handcuff(
+            engine, "Kenneth Walker III", "Zach Charbonnet", nfl_team=HOMER_TEAM
+        )
+
+    asyncio.run(add_handcuff_fixture())
+
+    payload = client.get(f"/inseason/league/{LEAGUE_ID}/handcuffs").json()
+    assert payload["data"]["week"] == 5
+    (flag,) = payload["data"]["handcuffs"]
+    assert flag["starter_name"] == "Kenneth Walker III"
+    assert flag["handcuff_name"] == "Zach Charbonnet"
+    assert flag["starter_team_id"] == 1
+    assert flag["starter_injury_status"] == "questionable"
+    assert flag["priority"] == "high"
+    assert flag["handcuff_percent_owned"] == 22.5
+    assert flag["homer_check"] is not None
+    assert flag["homer_check"]["suggested"]["name"] == "Zach Charbonnet"
 
 
 def test_locks_report_first_final_and_per_team(client, app_module):

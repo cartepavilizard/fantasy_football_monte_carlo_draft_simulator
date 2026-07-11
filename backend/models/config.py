@@ -107,6 +107,91 @@ INSEASON_SYNC_GAMEDAY_INTERVAL_HOURS = float(
     os.getenv("INSEASON_SYNC_GAMEDAY_INTERVAL_HOURS", 6)
 )
 
+# Matchup strength (Phase C, task C2). The observed points-allowed ratio
+# is shrunk toward neutral with a prior worth MATCHUP_PRIOR_GAMES weeks
+# of evidence (week 1 = fully neutral by construction), and C1 applies
+# it as a capped tilt — alpha * (multiplier - 1), never more than
+# MATCHUP_MAX_TILT — because ESPN's weekly projections already price
+# the opponent to some degree (full weight would double-count).
+MATCHUP_PRIOR_GAMES = float(os.getenv("MATCHUP_PRIOR_GAMES", 4))
+MATCHUP_TILT_ALPHA = float(os.getenv("MATCHUP_TILT_ALPHA", 0.5))
+MATCHUP_MAX_TILT = float(os.getenv("MATCHUP_MAX_TILT", 0.10))
+
+# Lineup optimizer (Phase C, task C1). The Thursday-morning pull syncs
+# all leagues then leaves a lineup_review notification, so Thursday
+# decisions are made on fresh data; off by default like every scheduled
+# fetch. ESPN_MY_TEAMS maps league id -> the user's team id (JSON, e.g.
+# '{"111": 3}') so the review can quote that team's optimizer delta;
+# leagues missing from the map get a generic review notification.
+LINEUP_PULL_ENABLED = os.getenv("LINEUP_PULL_ENABLED", "false").lower() == "true"
+LINEUP_PULL_WEEKDAY = int(os.getenv("LINEUP_PULL_WEEKDAY", 3))  # 3 = Thursday
+LINEUP_PULL_HOUR = int(os.getenv("LINEUP_PULL_HOUR", 7))  # local time
+try:
+    ESPN_MY_TEAMS = {
+        int(league_id): int(team_id)
+        for league_id, team_id in json.loads(
+            os.getenv("ESPN_MY_TEAMS", "{}")
+        ).items()
+    }
+except (ValueError, AttributeError):
+    print("WARNING: ESPN_MY_TEAMS is not a valid JSON map; ignoring it")
+    ESPN_MY_TEAMS = {}
+
+# Lineup-locking strategy (Phase C, task C6). A starter is "early" when
+# their kickoff is at least EARLY_LOCK_LEAD_HOURS before the week's
+# final lock (Thu/Fri/Sat games and the Wednesday opener qualify; the
+# Sunday slate does not). LOCK_FLEX_MARGIN_POINTS is the most projected
+# value the margin rule will suggest trading for Sunday flexibility —
+# see models/lineup.py for the option-value rationale behind 1.0.
+EARLY_LOCK_LEAD_HOURS = float(os.getenv("EARLY_LOCK_LEAD_HOURS", 36))
+LOCK_FLEX_MARGIN_POINTS = float(os.getenv("LOCK_FLEX_MARGIN_POINTS", 1.0))
+
+# Usage-shift detection (Phase C, task C4). A shift is CURRENT week vs
+# the mean of up to USAGE_BASELINE_MAX_WEEKS prior weeks (at least
+# USAGE_BASELINE_MIN_WEEKS of data, so the first possible alert is
+# week 3 — one week is noise, not a baseline). Thresholds are absolute
+# share-point moves; the floors ignore bottom-of-roster churn (a 3%->9%
+# snap player is nobody's pickup). See models/usage_shifts.py for why
+# these specific numbers.
+USAGE_SNAP_SHIFT_THRESHOLD = float(os.getenv("USAGE_SNAP_SHIFT_THRESHOLD", 0.12))
+USAGE_TARGET_SHIFT_THRESHOLD = float(
+    os.getenv("USAGE_TARGET_SHIFT_THRESHOLD", 0.07)
+)
+USAGE_BASELINE_MAX_WEEKS = int(os.getenv("USAGE_BASELINE_MAX_WEEKS", 4))
+USAGE_BASELINE_MIN_WEEKS = int(os.getenv("USAGE_BASELINE_MIN_WEEKS", 2))
+USAGE_SNAP_FLOOR = float(os.getenv("USAGE_SNAP_FLOOR", 0.15))
+USAGE_TARGET_FLOOR = float(os.getenv("USAGE_TARGET_FLOOR", 0.10))
+
+# Single-game variance flag (Phase C, task C8): distinguishes "quiet box
+# score" from "role change" when a player drew real opportunity (targets)
+# that didn't turn into catches — process-over-results, not a points
+# read. USAGE_VARIANCE_TARGET_FLOOR keeps token-target games out (2
+# targets/0 catches isn't a story); USAGE_VARIANCE_CATCH_RATE_CEILING is
+# loose enough to catch real bad-luck games (9 targets/3 catches = 33%)
+# without flagging an ordinary efficient one.
+USAGE_VARIANCE_TARGET_FLOOR = int(os.getenv("USAGE_VARIANCE_TARGET_FLOOR", 6))
+USAGE_VARIANCE_CATCH_RATE_CEILING = float(
+    os.getenv("USAGE_VARIANCE_CATCH_RATE_CEILING", 0.35)
+)
+
+# Playoff strength of schedule (Phase C, task C5). The fantasy-playoff
+# window whose opponents get summed against C2's defense_position_strength()
+# table; comma-separated so a league running a different bracket can
+# override it without a code change.
+PLAYOFF_SOS_WEEKS = [
+    int(week)
+    for week in os.getenv("PLAYOFF_SOS_WEEKS", "14,15,16").replace(" ", "").split(",")
+    if week
+]
+
+# Usage ingestion (Phase C, task C4's cheap half): the nflverse CSV pull
+# that fills PlayerWeekUsage. Off by default like every scheduled fetch;
+# InSeasonScheduler.run_now only ingests + raises usage-shift alerts
+# when this is on.
+USAGE_INGEST_ENABLED = (
+    os.getenv("USAGE_INGEST_ENABLED", "false").lower() == "true"
+)
+
 # Ranking aggregation settings (Phase 1)
 SCORING_FORMAT = os.getenv("SCORING_FORMAT", "ppr")  # standard | half_ppr | ppr
 try:

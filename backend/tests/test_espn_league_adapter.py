@@ -303,7 +303,9 @@ PRO_SCHEDULE_PAYLOAD = {
 
 
 def scripted_full_sync(overrides=None):
-    """Responses in sync_league's fetch order; overrides swap one section"""
+    """Responses in sync_league's fetch order; overrides swap one section.
+    Since C2's backfill, rosters are fetched twice per pass (week-1 first,
+    then the current week) — an override of "rosters" applies to both."""
     responses = {
         "league": (200, LEAGUE_PAYLOAD),
         "rosters": (200, ROSTER_PAYLOAD),
@@ -315,7 +317,8 @@ def scripted_full_sync(overrides=None):
     return ScriptedTransport(
         [
             responses["league"],
-            responses["rosters"],
+            responses["rosters"],  # week-1 backfill
+            responses["rosters"],  # current week
             responses["matchups"],
             responses["free_agents"],
             responses["transactions"],
@@ -449,7 +452,8 @@ def test_full_sync_persists_every_section():
             len(await engine.find(LeagueTransaction)),
         )
 
-    assert asyncio.run(counts()) == (1, 2, 3, 1, 2)
+    # rosters cover the current week AND the week-4 backfill (2 teams each)
+    assert asyncio.run(counts()) == (1, 4, 3, 1, 2)
     # transaction names resolved from the same pass's rosters + free agents
     transactions = find(engine, LeagueTransaction)
     by_id = {t.espn_transaction_id: t for t in transactions}
@@ -464,7 +468,7 @@ def test_resync_replaces_instead_of_duplicating():
     engine = make_engine()
     run_full_sync(engine)
     run_full_sync(engine)
-    assert len(find(engine, TeamWeekRoster)) == 2
+    assert len(find(engine, TeamWeekRoster)) == 4
     assert len(find(engine, WeeklyMatchup)) == 3
     assert len(find(engine, LeagueTransaction)) == 2
     assert len(find(engine, InSeasonLeague)) == 1
@@ -475,14 +479,14 @@ def test_cookie_expiry_degrades_to_cached_data_with_visible_warning():
     run_full_sync(engine)  # season in progress, cookies were good
 
     # cookies expire mid-season: every request now comes back 401
-    expired = ScriptedTransport([(401, {"messages": ["Not authorized"]})] * 5)
+    expired = ScriptedTransport([(401, {"messages": ["Not authorized"]})] * 6)
     summary = run_full_sync(engine, transport=expired)
 
     for section in ["league", "rosters", "matchups", "free_agents", "transactions"]:
         assert summary["sections"][section]["success"] is False
         assert summary["sections"][section]["error_kind"] == "auth"
     # the cached data is untouched — degraded, not destroyed
-    assert len(find(engine, TeamWeekRoster)) == 2
+    assert len(find(engine, TeamWeekRoster)) == 4
     assert len(find(engine, InSeasonLeague)) == 1
     # and the staleness surface says exactly what happened
     freshness = asyncio.run(league_freshness(engine, LEAGUE_ID, SEASON))
@@ -506,6 +510,35 @@ def test_sections_fail_independently():
     by_id = {t.espn_transaction_id: t for t in transactions}
     assert by_id["txn-1"].items[0].player_name == "Jaxon Smith-Njigba"
     assert by_id["txn-1"].items[1].player_name is None  # was on the broken roster
+
+
+def test_backfill_persists_previous_week_rosters_too():
+    """C2 reads completed-week actuals: each pass re-fetches week-1 so
+    a finished week's stored actuals include Sunday/Monday-night finals"""
+    engine = make_engine()
+    run_full_sync(engine)
+    weeks = sorted({roster.week for roster in find(engine, TeamWeekRoster)})
+    assert weeks == [4, 5]
+
+
+def test_backfill_failure_leaves_current_week_section_green():
+    engine = make_engine()
+    transport = ScriptedTransport(
+        [
+            (200, LEAGUE_PAYLOAD),
+            (500, {}),  # week-4 backfill fails
+            (200, ROSTER_PAYLOAD),
+            (200, MATCHUP_PAYLOAD),
+            (200, FREE_AGENT_PAYLOAD),
+            (200, TRANSACTIONS_PAYLOAD),
+        ]
+    )
+    summary = run_full_sync(engine, transport=transport)
+    assert summary["sections"]["rosters"]["success"] is True
+    assert sorted({roster.week for roster in find(engine, TeamWeekRoster)}) == [5]
+    # the current-week log lands last, so freshness stays clean
+    freshness = asyncio.run(league_freshness(engine, LEAGUE_ID, SEASON))
+    assert freshness["sections"]["rosters"]["last_error"] is None
 
 
 def test_week_sections_skip_when_week_is_unknowable():

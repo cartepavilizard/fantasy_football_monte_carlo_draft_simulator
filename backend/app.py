@@ -25,7 +25,7 @@ import inseason_api
 import notifications_api
 import backtest as backtest_module
 import profiling
-from scheduler import InSeasonScheduler, RankingsScheduler
+from scheduler import InSeasonScheduler, LineupPullScheduler, RankingsScheduler
 from models import config as app_config
 from models.tendencies import (
     MISS_ADP_AFTER,
@@ -139,6 +139,10 @@ rankings_scheduler = RankingsScheduler(lambda: engine)
 # rankings_scheduler above — paused via POST, one failed run never kills it.
 inseason_scheduler = InSeasonScheduler(lambda: engine)
 
+# The Thursday-morning pull (C1): weekly sync + lineup review
+# notifications ahead of the first lock, off by default like the rest
+lineup_pull_scheduler = LineupPullScheduler(lambda: engine)
+
 # Cached-only in-season reads (B4) + notifications (B5). The lambda is
 # late-bound: it resolves this module's `engine` global at call time, so
 # tests that monkeypatch app.engine are honored by the routers too.
@@ -166,6 +170,16 @@ async def start_inseason_scheduler():
 @app.on_event("shutdown")
 async def stop_inseason_scheduler():
     await inseason_scheduler.stop()
+
+
+@app.on_event("startup")
+async def start_lineup_pull_scheduler():
+    lineup_pull_scheduler.start()
+
+
+@app.on_event("shutdown")
+async def stop_lineup_pull_scheduler():
+    await lineup_pull_scheduler.stop()
 
 
 # Include origins for CORS
@@ -1894,3 +1908,24 @@ async def set_inseason_schedule(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return inseason_scheduler.status()
+
+
+@app.get("/inseason/lineup_schedule", tags=["inseason"])
+async def get_lineup_pull_schedule():
+    """The Thursday-morning pull's state (C1): enabled, weekday/hour,
+    next/last run, and the last run's outcome"""
+    return lineup_pull_scheduler.status()
+
+
+@app.post("/inseason/lineup_schedule", tags=["inseason"])
+async def set_lineup_pull_schedule(
+    enabled: bool = None, weekday: int = None, hour: int = None
+):
+    """Runtime control of the weekly lineup pull (weekday 0=Monday)"""
+    try:
+        lineup_pull_scheduler.configure(
+            enabled=enabled, weekday=weekday, hour=hour
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return lineup_pull_scheduler.status()

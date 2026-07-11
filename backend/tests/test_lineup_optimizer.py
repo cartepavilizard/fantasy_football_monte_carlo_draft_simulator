@@ -188,33 +188,35 @@ def test_optimize_finds_the_flex_upgrade_and_reports_moves():
 
     asyncio.run(seed())
     result = run_optimize(engine)
-    # WR Three (10.5) belongs in FLEX over RB Three (8.0)
-    flex = next(s for s in result["optimal"] if s["slot"] == "FLEX")
-    assert flex["player"]["player_name"] == "WR Three"
+    # WR Three (10.5) starts over RB Three (8.0)
+    starters = {
+        s["player"]["player_name"] for s in result["optimal"] if s["player"]
+    }
+    assert "WR Three" in starters and "RB Three" not in starters
     assert result["delta_points"] == 2.5
-    assert result["moves"] == [
-        {
-            "player_id": 7,
-            "player_name": "RB Three",
-            "from_slot": "FLEX",
-            "to_slot": "BE",
-        },
-        {
-            "player_id": 8,
-            "player_name": "WR Three",
-            "from_slot": "BE",
-            "to_slot": "FLEX",
-        },
-    ]
+    # C6's arrangement puts Thursday's WR Three in the dedicated WR slot
+    # and hands FLEX to a Sunday player — the moves say so
+    by_name = {move["player_name"]: move for move in result["moves"]}
+    assert by_name["RB Three"] == {
+        "player_id": 7,
+        "player_name": "RB Three",
+        "from_slot": "FLEX",
+        "to_slot": "BE",
+    }
+    assert by_name["WR Three"]["from_slot"] == "BE"
+    assert by_name["WR Three"]["to_slot"] == "WR"
+    assert by_name["WR Two"]["to_slot"] == "FLEX"
     # IR player is never a candidate, even at 20 projected points
-    assert all(
-        s["player"] is None or s["player"]["player_id"] != 10
-        for s in result["optimal"]
-    )
+    assert "IR Guy" not in starters
     assert [p["player_id"] for p in result["ir"]] == [10]
     # matchup context annotated per player (neutral: no completed weeks)
-    assert flex["player"]["opponent"] == "SEA"
-    assert flex["player"]["matchup"]["multiplier"] == 1.0
+    wr_three = next(
+        s["player"]
+        for s in result["optimal"]
+        if s["player"] and s["player"]["player_name"] == "WR Three"
+    )
+    assert wr_three["opponent"] == "SEA"
+    assert wr_three["matchup"]["multiplier"] == 1.0
     assert any("neutral" in w for w in result["warnings"])
 
 
@@ -265,10 +267,13 @@ def test_matchup_tilt_moves_the_call():
         },
     }
     result = run_optimize(engine, strength=strength)
-    flex = next(s for s in result["optimal"] if s["slot"] == "FLEX")
-    assert flex["player"]["player_name"] == "WR Three"
-    # 10.5 * 1.10 (alpha 0.5 * 20% = 10% tilt) = 11.55
-    assert flex["player"]["adjusted_projection"] == 11.55
+    wr_three = next(
+        s["player"]
+        for s in result["optimal"]
+        if s["player"] and s["player"]["player_name"] == "WR Three"
+    )
+    # 10.5 * 1.10 (alpha 0.5 * 20% = 10% tilt) = 11.55, enough to start
+    assert wr_three["adjusted_projection"] == 11.55
 
 
 def test_injury_and_bye_warnings_on_current_lineup():
@@ -340,7 +345,7 @@ def test_lineup_review_quotes_delta_for_the_mapped_team():
 
     first, again = asyncio.run(go())
     assert first.kind == "lineup_review"
-    assert "+2.5" in first.body and "2 move(s)" in first.body
+    assert "+2.5" in first.body and "3 move(s)" in first.body
     assert again is None  # deduped: one review per league-week
 
 

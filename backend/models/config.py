@@ -137,6 +137,15 @@ except (ValueError, AttributeError):
     print("WARNING: ESPN_MY_TEAMS is not a valid JSON map; ignoring it")
     ESPN_MY_TEAMS = {}
 
+# Lineup-locking strategy (Phase C, task C6). A starter is "early" when
+# their kickoff is at least EARLY_LOCK_LEAD_HOURS before the week's
+# final lock (Thu/Fri/Sat games and the Wednesday opener qualify; the
+# Sunday slate does not). LOCK_FLEX_MARGIN_POINTS is the most projected
+# value the margin rule will suggest trading for Sunday flexibility —
+# see models/lineup.py for the option-value rationale behind 1.0.
+EARLY_LOCK_LEAD_HOURS = float(os.getenv("EARLY_LOCK_LEAD_HOURS", 36))
+LOCK_FLEX_MARGIN_POINTS = float(os.getenv("LOCK_FLEX_MARGIN_POINTS", 1.0))
+
 # Ranking aggregation settings (Phase 1)
 SCORING_FORMAT = os.getenv("SCORING_FORMAT", "ppr")  # standard | half_ppr | ppr
 try:

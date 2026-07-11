@@ -45,12 +45,43 @@ edge cases with overlapping flex types (RB/WR vs WR/TE vs OP). A tiny
 fill bonus inside the DP prefers starting a zero-projection player over
 an empty slot without ever distorting a real comparison.
 
-C6 (lineup-locking strategy) integrates here: its arrangement and
-margin rules operate on this optimizer's output.
+C6 — LINEUP-LOCKING STRATEGY (the decision rule, defined here):
+
+Players lock individually at their game's kickoff, so WHERE a player
+sits when they lock determines which slots stay playable later in the
+week. Two rules:
+
+1. Arrangement rule (zero cost, always applied): among assignments with
+   the same optimal total, prefer the one that keeps flexible slots
+   unlocked longest — early-locking players go to their most
+   restrictive eligible slot, late-locking players hold the flex-type
+   slots. Implemented as a second DP over the chosen starter set (the
+   total is a property of the SET, so every legal re-arrangement of it
+   scores the same and this is free EV) maximizing sum of
+   slot_flexibility x kickoff_lateness. The Wednesday opener needs no
+   special case: the rules key on kickoff times, wherever they fall.
+2. Margin rule (advice, never auto-applied): when ANY starter locks
+   early (kickoff >= EARLY_LOCK_LEAD_HOURS before the week's final
+   lock) and a bench player eligible for that slot kicks off later
+   within LOCK_FLEX_MARGIN_POINTS of the starter's adjusted projection,
+   surface the swap as an option — starting the later player keeps the
+   whole call open until their kickoff. (Rule 1 already ensures the
+   early starter's SLOT does minimal damage; this rule is about the
+   start/sit decision itself.) Rationale: keeping the decision open is
+   an option worth ~P(pivot needed) x E(points recovered) ~= 10-15% x
+   6-8 pts ~= 0.6-1.2 pts, hence the 1.0-point default margin. The
+   optimizer still recommends the higher projection; the advice
+   quantifies what the flexibility would cost, and the user — who
+   knows whether questionable tags loom elsewhere — decides.
 """
+import datetime
 from typing import Dict, List, Optional
 
-from .config import ESPN_MY_TEAMS
+from .config import (
+    EARLY_LOCK_LEAD_HOURS,
+    ESPN_MY_TEAMS,
+    LOCK_FLEX_MARGIN_POINTS,
+)
 from .inseason import InSeasonLeague, ProGame, TeamWeekRoster
 from .notifications import ensure_notification
 from .matchup_strength import (
@@ -76,6 +107,12 @@ STARTING_SLOT_POSITIONS = {
 
 # Canonical display/solve order: dedicated slots before flex-type
 SLOT_ORDER = ["QB", "TQB", "RB", "WR", "TE", "RB/WR", "WR/TE", "FLEX", "OP", "K", "DST"]
+
+# C6: how many positions a slot accepts = how valuable keeping it
+# unlocked is (a locked FLEX forecloses more pivots than a locked QB)
+SLOT_FLEXIBILITY = {
+    slot: len(positions) for slot, positions in STARTING_SLOT_POSITIONS.items()
+}
 
 # Injury statuses that make starting someone a warning, not just a choice
 HARD_INJURY_STATUSES = {"out", "injury_reserve", "suspension", "doubtful"}
@@ -132,6 +169,111 @@ def best_assignment(slots, candidates, weights):
     _, assignment = solve(0, 0)
     total = sum(weights.get(player_id) or 0.0 for player_id in assignment.values())
     return assignment, round(total, 2)
+
+
+def arrange_for_lock_flexibility(slots, assignment, candidates, kickoffs):
+    """
+    C6 rule 1: re-arrange the CHOSEN starter set (the total is a
+    property of the set, so this is free) to keep flexible slots
+    unlocked longest — maximize sum of slot_flexibility * lateness rank.
+    """
+    chosen = set(assignment.values())
+    starters = [(pid, pos) for pid, pos in candidates if pid in chosen]
+    if not starters:
+        return assignment
+    # lateness rank in [0, 1]: earliest kickoff 0, latest 1; unknown
+    # kickoff (bye) counts earliest — it never usefully locks a slot
+    times = sorted(
+        {kickoffs[pid] for pid, _ in starters if kickoffs.get(pid) is not None}
+    )
+    span = max(len(times) - 1, 1)
+    lateness = {
+        pid: (times.index(kickoffs[pid]) / span if kickoffs.get(pid) else 0.0)
+        for pid, _ in starters
+    }
+
+    memo = {}
+    full_mask = (1 << len(starters)) - 1
+
+    def solve(i, used):
+        if i == len(slots):
+            # every chosen starter must land somewhere or the
+            # arrangement isn't the same lineup
+            return (0.0, {}) if used == full_mask else (None, None)
+        key = (i, used)
+        if key in memo:
+            return memo[key]
+        best_score, best_map = solve(i + 1, used)  # slot stays empty
+        eligible_positions = STARTING_SLOT_POSITIONS[slots[i]]
+        for j, (player_id, position) in enumerate(starters):
+            if used & (1 << j) or position not in eligible_positions:
+                continue
+            sub_score, sub_map = solve(i + 1, used | (1 << j))
+            if sub_score is None:
+                continue
+            score = SLOT_FLEXIBILITY[slots[i]] * lateness[player_id] + sub_score
+            if best_score is None or score > best_score + 1e-12:
+                best_score = score
+                best_map = dict(sub_map)
+                best_map[i] = player_id
+        memo[key] = (best_score, best_map)
+        return memo[key]
+
+    score, arrangement = solve(0, 0)
+    return arrangement if arrangement is not None else assignment
+
+
+def _fmt_kickoff(moment: Optional[datetime.datetime]) -> Optional[str]:
+    if moment is None:
+        return None
+    time_part = moment.strftime("%I:%M %p").lstrip("0")
+    return f"{moment.strftime('%a')} {time_part}"
+
+
+def lock_advice(slots, assignment, candidates, weights, kickoffs, final_lock):
+    """
+    C6 rule 2 (advice only, never auto-applied): flag any starter who
+    locks early when a later-kicking bench alternative eligible for
+    their slot sits within the margin. One suggestion per slot.
+    """
+    if final_lock is None:
+        return []
+    advice = []
+    chosen = set(assignment.values())
+    early_cutoff = final_lock - datetime.timedelta(hours=EARLY_LOCK_LEAD_HOURS)
+    for slot_index, player_id in sorted(assignment.items()):
+        slot = slots[slot_index]
+        kickoff = kickoffs.get(player_id)
+        if kickoff is None or kickoff > early_cutoff:
+            continue
+        occupant_points = weights.get(player_id) or 0.0
+        for candidate_id, position in candidates:
+            if candidate_id in chosen or position not in STARTING_SLOT_POSITIONS[slot]:
+                continue
+            alt_kickoff = kickoffs.get(candidate_id)
+            alt_points = weights.get(candidate_id) or 0.0
+            if alt_kickoff is None or alt_kickoff <= kickoff:
+                continue
+            cost = round(occupant_points - alt_points, 2)
+            if cost > LOCK_FLEX_MARGIN_POINTS:
+                continue
+            advice.append(
+                {
+                    "slot": slot,
+                    "start": player_id,
+                    "alternative": candidate_id,
+                    "cost_points": max(cost, 0.0),
+                    "note": (
+                        f"{slot} locks {_fmt_kickoff(kickoff)}. A bench "
+                        f"alternative kicks off {_fmt_kickoff(alt_kickoff)} at "
+                        f"a cost of {max(cost, 0.0):.1f} projected points — "
+                        "starting the later player keeps this slot open in "
+                        "case you need to pivot before Sunday."
+                    ),
+                }
+            )
+            break  # one suggestion per slot is enough
+    return advice
 
 
 async def optimize_lineup(
@@ -214,7 +356,8 @@ async def optimize_lineup(
 
     slots = slot_instances(league.lineup_slot_counts)
     assignment, optimal_total = best_assignment(slots, candidates, weights)
-    advice = []  # C6 fills this (arrangement + margin rules)
+    assignment = arrange_for_lock_flexibility(slots, assignment, candidates, kickoffs)
+    advice = lock_advice(slots, assignment, candidates, weights, kickoffs, final_lock)
 
     optimal_slot_by_player = {
         player_id: slots[slot_index] for slot_index, player_id in assignment.items()

@@ -32,6 +32,7 @@ from odmantic import query
 
 from models.config import DRAFT_YEAR
 from models.handcuffs import (
+    available_handcuff_flags,
     delete_handcuff,
     list_handcuffs,
     seed_handcuffs,
@@ -39,6 +40,8 @@ from models.handcuffs import (
 )
 from models.lineup import optimize_lineup
 from models.matchup_strength import defense_position_strength
+from models.playoff_sos import playoff_schedule_strength, playoff_sos_for_league
+from models.streaming import streaming_recommendations
 from models.usage_shifts import detect_usage_shifts
 from models.inseason import (
     FreeAgentSnapshot,
@@ -268,6 +271,25 @@ async def get_lineup(
     return await _envelope(engine, espn_league_id, season, data)
 
 
+@router.get("/league/{espn_league_id}/streaming")
+async def get_streaming(
+    espn_league_id: int,
+    week: Optional[int] = None,
+    season: int = DRAFT_YEAR,
+):
+    """
+    K/DST streaming ranks (C3): the latest free-agent K/DST pool ranked
+    by C2's matchup-adjusted points, tie-broken by the raw multiplier,
+    with each row's matchup context and C9's homer check attached.
+    Mongo-only, inherits B4's cached-only constraint.
+    """
+    engine = _engine()
+    league = await _league_or_404(engine, espn_league_id, season)
+    week = week or league.latest_scoring_period
+    data = await streaming_recommendations(engine, espn_league_id, season, week)
+    return await _envelope(engine, espn_league_id, season, data)
+
+
 @router.get("/matchup_strength")
 async def get_matchup_strength(
     position: Optional[str] = None,
@@ -294,6 +316,39 @@ async def get_matchup_strength(
             )
         strength["positions"] = {wanted: strength["positions"][wanted]}
     return strength
+
+
+@router.get("/playoff_sos")
+async def get_playoff_sos(
+    position: Optional[str] = None,
+    espn_league_id: Optional[int] = None,
+    season: int = DRAFT_YEAR,
+):
+    """
+    Weeks-14-16 playoff strength of schedule (C5): for each NFL team, per
+    position, C2's defense_position_strength() multipliers summed across
+    its playoff-window opponents and ranked (rank 1 = easiest schedule).
+    Computed entirely from Mongo, so it inherits B4's cached-only
+    constraint. Confidence and the early-season "all neutral" `note`
+    carry through from C2 unchanged — a September call is honest about
+    being noise, not a confident-looking ranking. Optionally scoped to
+    one league via espn_league_id: adds `rosters`, each fantasy team's
+    current starters joined against the same table — how friendly your
+    playoff schedule actually is, not just the league's.
+    """
+    engine = _engine()
+    sos = await playoff_schedule_strength(engine, season)
+    if espn_league_id is not None:
+        league = await _league_or_404(engine, espn_league_id, season)
+        sos["rosters"] = await playoff_sos_for_league(engine, league, season, sos)
+    if position is not None:
+        wanted = position.upper()
+        if wanted not in sos["positions"]:
+            raise HTTPException(
+                status_code=404, detail=f"Unknown position {position}"
+            )
+        sos["positions"] = {wanted: sos["positions"][wanted]}
+    return sos
 
 
 # --- handcuff map (C7): curated, Mongo-only, no external calls ---------------
@@ -334,6 +389,25 @@ async def remove_handcuff(starter_name: str):
             status_code=404, detail=f"No handcuff mapping for {starter_name}"
         )
     return {"deleted": starter_name}
+
+
+@router.get("/league/{espn_league_id}/handcuffs")
+async def get_league_handcuffs(
+    espn_league_id: int,
+    week: Optional[int] = None,
+    season: int = DRAFT_YEAR,
+):
+    """
+    Handcuff flags for one league-week (C7): the curated map joined
+    against this league's rostered starters and free-agent pool, with
+    priority and C9's homer check attached. Mongo-only, inherits B4's
+    cached-only constraint.
+    """
+    engine = _engine()
+    league = await _league_or_404(engine, espn_league_id, season)
+    week = week or league.latest_scoring_period
+    flags = await available_handcuff_flags(engine, espn_league_id, season, week)
+    return await _envelope(engine, espn_league_id, season, {"week": week, "handcuffs": flags})
 
 
 @router.get("/usage_shifts")

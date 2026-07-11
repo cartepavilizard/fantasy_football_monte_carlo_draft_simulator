@@ -11,18 +11,85 @@ import asyncio
 from mongomock_motor import AsyncMongoMockClient
 from odmantic import AIOEngine
 
+from models.config import HOMER_TEAM
 from models.handcuffs import (
     SEED_HANDCUFF_PAIRS,
     HandcuffPair,
+    available_handcuff_flags,
     delete_handcuff,
+    ensure_handcuff_notifications,
     list_handcuffs,
     seed_handcuffs,
     upsert_handcuff,
 )
+from models.inseason import FreeAgentEntry, FreeAgentSnapshot, RosterSlotEntry, TeamWeekRoster
+from models.notifications import Notification
+
+LEAGUE_ID = 111
+SEASON = 2026
+WEEK = 5
 
 
 def make_engine():
     return AIOEngine(client=AsyncMongoMockClient(), database="test-handcuffs")
+
+
+async def _seed_flag_fixture(
+    engine,
+    starter_injury_status="questionable",
+    handcuff_team="SEA",
+    include_alt_free_agent=True,
+):
+    """One starter (RB, on team 1's roster) with a curated handcuff
+    sitting in the free-agent pool; returns nothing, just seeds state"""
+    await engine.save(
+        TeamWeekRoster(
+            espn_league_id=LEAGUE_ID,
+            season=SEASON,
+            week=WEEK,
+            espn_team_id=1,
+            entries=[
+                RosterSlotEntry(
+                    player_id=1,
+                    player_name="Kenneth Walker III",
+                    position="RB",
+                    nfl_team=handcuff_team,
+                    lineup_slot="RB",
+                    injury_status=starter_injury_status,
+                    projected_points=12.0,
+                )
+            ],
+        )
+    )
+    entries = [
+        FreeAgentEntry(
+            player_id=2,
+            player_name="Zach Charbonnet",
+            position="RB",
+            nfl_team=handcuff_team,
+            percent_owned=22.5,
+            projected_points=9.0,
+        )
+    ]
+    if include_alt_free_agent:
+        entries.append(
+            FreeAgentEntry(
+                player_id=3,
+                player_name="Some Other RB",
+                position="RB",
+                nfl_team="ATL",
+                percent_owned=5.0,
+                projected_points=4.0,
+            )
+        )
+    await engine.save(
+        FreeAgentSnapshot(
+            espn_league_id=LEAGUE_ID, season=SEASON, week=WEEK, entries=entries
+        )
+    )
+    await upsert_handcuff(
+        engine, "Kenneth Walker III", "Zach Charbonnet", nfl_team=handcuff_team
+    )
 
 
 def test_seed_inserts_all_pairs_once():
@@ -114,3 +181,149 @@ def test_handcuff_endpoints_crud(client):
 
     assert client.delete("/inseason/handcuffs/James Cook").status_code == 200
     assert client.delete("/inseason/handcuffs/James Cook").status_code == 404
+
+
+# --- flagging (C7's cheap half): joining the map against synced data --------
+
+
+def test_flags_empty_when_nothing_synced_or_no_pairs_curated():
+    engine = make_engine()
+    assert asyncio.run(available_handcuff_flags(engine, LEAGUE_ID, SEASON, WEEK)) == []
+
+    asyncio.run(seed_handcuffs(engine))  # pairs exist, but nothing rostered
+    assert asyncio.run(available_handcuff_flags(engine, LEAGUE_ID, SEASON, WEEK)) == []
+
+
+def test_flag_emitted_only_when_starter_rostered_and_handcuff_a_free_agent():
+    engine = make_engine()
+
+    async def go():
+        await _seed_flag_fixture(engine, starter_injury_status=None)
+        return await available_handcuff_flags(engine, LEAGUE_ID, SEASON, WEEK)
+
+    (flag,) = asyncio.run(go())
+    assert flag["starter_name"] == "Kenneth Walker III"
+    assert flag["handcuff_name"] == "Zach Charbonnet"
+    assert flag["nfl_team"] == "SEA"
+    assert flag["starter_team_id"] == 1
+    assert flag["handcuff_projected_points"] == 9.0
+    assert flag["handcuff_percent_owned"] == 22.5
+    # a healthy starter's spare-parts handcuff is normal, not urgent
+    assert flag["priority"] == "normal"
+
+
+def test_priority_high_only_for_questionable_doubtful_or_out():
+    for status, expected in [
+        ("questionable", "high"),
+        ("doubtful", "high"),
+        ("out", "high"),
+        ("healthy", "normal"),
+        (None, "normal"),
+    ]:
+        engine = make_engine()
+
+        async def go(status=status):
+            await _seed_flag_fixture(
+                engine, starter_injury_status=status, handcuff_team="ATL"
+            )
+            return await available_handcuff_flags(engine, LEAGUE_ID, SEASON, WEEK)
+
+        (flag,) = asyncio.run(go())
+        assert flag["priority"] == expected, status
+
+
+def test_no_flag_when_handcuff_not_in_free_agent_pool():
+    engine = make_engine()
+
+    async def go():
+        await engine.save(
+            TeamWeekRoster(
+                espn_league_id=LEAGUE_ID,
+                season=SEASON,
+                week=WEEK,
+                espn_team_id=1,
+                entries=[
+                    RosterSlotEntry(
+                        player_id=1,
+                        player_name="Kenneth Walker III",
+                        position="RB",
+                        nfl_team="SEA",
+                        lineup_slot="RB",
+                        injury_status="out",
+                    )
+                ],
+            )
+        )
+        await upsert_handcuff(engine, "Kenneth Walker III", "Zach Charbonnet")
+        # no FreeAgentSnapshot at all — the handcuff isn't sitting anywhere
+        return await available_handcuff_flags(engine, LEAGUE_ID, SEASON, WEEK)
+
+    assert asyncio.run(go()) == []
+
+
+def test_homer_check_attached_only_for_homer_team_handcuffs():
+    engine = make_engine()
+
+    async def go_homer():
+        await _seed_flag_fixture(engine, handcuff_team=HOMER_TEAM)
+        return await available_handcuff_flags(engine, LEAGUE_ID, SEASON, WEEK)
+
+    (flag,) = asyncio.run(go_homer())
+    assert flag["homer_check"] is not None
+    assert flag["homer_check"]["suggested"]["name"] == "Zach Charbonnet"
+    assert flag["homer_check"]["homer_team"] == HOMER_TEAM
+    assert flag["homer_check"]["alternatives"][0]["name"] == "Some Other RB"
+
+    engine2 = make_engine()
+
+    async def go_non_homer():
+        await _seed_flag_fixture(engine2, handcuff_team="ATL")
+        return await available_handcuff_flags(engine2, LEAGUE_ID, SEASON, WEEK)
+
+    (flag2,) = asyncio.run(go_non_homer())
+    assert flag2["homer_check"] is None
+
+
+# --- notifications: high priority only, insurance/opportunity framing -------
+
+
+def test_notification_fires_only_for_high_priority():
+    engine = make_engine()
+
+    async def go():
+        await _seed_flag_fixture(
+            engine, starter_injury_status="healthy", handcuff_team="ATL"
+        )
+        created = await ensure_handcuff_notifications(engine, LEAGUE_ID, SEASON, WEEK)
+        return created, await engine.find(Notification)
+
+    created, stored = asyncio.run(go())
+    assert created == []
+    assert stored == []
+
+
+def test_notification_dedupes_and_never_mentions_points():
+    engine = make_engine()
+
+    async def go():
+        await _seed_flag_fixture(
+            engine, starter_injury_status="out", handcuff_team="ATL"
+        )
+        first = await ensure_handcuff_notifications(engine, LEAGUE_ID, SEASON, WEEK)
+        again = await ensure_handcuff_notifications(engine, LEAGUE_ID, SEASON, WEEK)
+        return first, again
+
+    first, again = asyncio.run(go())
+    assert len(first) == 1
+    assert again == []  # deduped on the second pass
+
+    notification = first[0]
+    assert notification.kind == "handcuff_available"
+    assert (
+        notification.dedupe_key
+        == f"handcuff:{LEAGUE_ID}:{SEASON}:w{WEEK}:Kenneth Walker III"
+    )
+    assert "Zach Charbonnet" in notification.body
+    assert "workload" in notification.body
+    assert "pts" not in notification.body
+    assert "points" not in notification.body.lower()

@@ -58,6 +58,22 @@ a synced league (any roster, or the free-agent pool — i.e. plausibly
 actionable); detection itself is league-independent and returns every
 shift for the trends UI.
 
+SINGLE-GAME VARIANCE FLAG (C8's addition to this module): real
+opportunity (targets) that didn't turn into catches in one game is
+variance, not a role change — "1 catch on 9 targets" is BRAINSTORM
+§2.9's own example. `variance_note()` below computes it from the same
+current-week PlayerWeekUsage row and is attached to every shift dict
+as `"variance"` (nullable) so the trends UI can show it inline instead
+of a player's quiet box score reading as a demotion. It is exported
+standalone (not just via detect_usage_shifts) so any future view that
+reads PlayerWeekUsage directly — C3/C5/C7 already don't need it since
+they carry no target/reception data, but E-phase trade grading might —
+can compute the same flag without re-deriving the thresholds. The
+copy itself lives in the frontend's shared `VarianceFlag` component
+(frontend/components/variance-flag.tsx), not here, since the right
+framing differs per call site; this module only decides WHETHER a game
+clears the bar.
+
 --- SPEC FOR THE CHEAP HALF (recurring ingestion transform) ----------
 
 1. data_sources/nflverse.py: `NflverseUsageAdapter` styled exactly like
@@ -102,6 +118,8 @@ from .config import (
     USAGE_SNAP_SHIFT_THRESHOLD,
     USAGE_TARGET_FLOOR,
     USAGE_TARGET_SHIFT_THRESHOLD,
+    USAGE_VARIANCE_CATCH_RATE_CEILING,
+    USAGE_VARIANCE_TARGET_FLOOR,
 )
 from .inseason import FreeAgentSnapshot, PlayerWeekUsage, TeamWeekRoster
 from .notifications import ensure_notification
@@ -115,6 +133,36 @@ USAGE_METRICS = {
         "target share",
     ),
 }
+
+
+def variance_note(usage: PlayerWeekUsage) -> Optional[dict]:
+    """
+    C8's single-game variance flag: real opportunity (targets) that
+    didn't show up as catches in this one game — a quiet box score, not
+    a lost role. None unless targets clear USAGE_VARIANCE_TARGET_FLOOR
+    (a token target isn't a story) and the resulting catch rate is at
+    or under USAGE_VARIANCE_CATCH_RATE_CEILING. Receptions aren't a
+    PlayerWeekUsage field directly — they're derived from
+    touches - carries, matching the ingestion spec's touches = carries
+    + receptions (see the module docstring's cheap-half spec) — so both
+    must be present to compute this.
+    """
+    targets = usage.targets
+    if targets is None or targets < USAGE_VARIANCE_TARGET_FLOOR:
+        return None
+    if usage.touches is None or usage.carries is None:
+        return None
+    receptions = usage.touches - usage.carries
+    if receptions < 0:
+        return None
+    catch_rate = receptions / targets
+    if catch_rate > USAGE_VARIANCE_CATCH_RATE_CEILING:
+        return None
+    return {
+        "targets": targets,
+        "receptions": receptions,
+        "catch_rate": round(catch_rate, 4),
+    }
 
 
 async def detect_usage_shifts(engine, season: int, week: int) -> List[dict]:
@@ -140,6 +188,7 @@ async def detect_usage_shifts(engine, season: int, week: int) -> List[dict]:
         current = weeks.get(week)
         if current is None:
             continue
+        variance = variance_note(current)
         for metric, (threshold, floor, phrase) in USAGE_METRICS.items():
             value = getattr(current, metric)
             if value is None:
@@ -170,6 +219,7 @@ async def detect_usage_shifts(engine, season: int, week: int) -> List[dict]:
                     "delta": round(delta, 4),
                     "direction": "rising" if delta > 0 else "falling",
                     "baseline_weeks": len(priors),
+                    "variance": variance,
                 }
             )
     return shifts

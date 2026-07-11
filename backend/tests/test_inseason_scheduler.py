@@ -39,6 +39,17 @@ class ReminderRecorder:
         return []
 
 
+class UsageRecorder:
+    """Stands in for ingest_usage / ensure_usage_shift_notifications"""
+
+    def __init__(self):
+        self.calls = []
+
+    async def __call__(self, engine, season, week):
+        self.calls.append((season, week))
+        return {}
+
+
 def run_scheduler_for(scheduler, seconds):
     async def go():
         scheduler.start()
@@ -51,19 +62,27 @@ def run_scheduler_for(scheduler, seconds):
 def make_scheduler(**kwargs):
     sync_fn = kwargs.pop("sync_fn", None) or SyncRecorder()
     reminder_fn = kwargs.pop("reminder_fn", None) or ReminderRecorder()
+    usage_ingest_fn = kwargs.pop("usage_ingest_fn", None) or UsageRecorder()
+    usage_notify_fn = kwargs.pop("usage_notify_fn", None) or UsageRecorder()
     kwargs.setdefault("enabled", True)
     kwargs.setdefault("interval_hours", 0.03 / 3600)
     # both cadences tiny by default so lifecycle tests tick regardless of
     # which real-world weekday the suite happens to run on; cadence tests
     # below override both explicitly and inject now_fn to pin the weekday
     kwargs.setdefault("gameday_interval_hours", kwargs["interval_hours"])
-    return InSeasonScheduler(
-        lambda: None, sync_fn=sync_fn, reminder_fn=reminder_fn, **kwargs
-    ), sync_fn, reminder_fn
+    scheduler = InSeasonScheduler(
+        lambda: None,
+        sync_fn=sync_fn,
+        reminder_fn=reminder_fn,
+        usage_ingest_fn=usage_ingest_fn,
+        usage_notify_fn=usage_notify_fn,
+        **kwargs,
+    )
+    return scheduler, sync_fn, reminder_fn, usage_ingest_fn, usage_notify_fn
 
 
 def test_scheduler_ticks_on_interval_when_enabled():
-    scheduler, sync_fn, reminder_fn = make_scheduler()
+    scheduler, sync_fn, reminder_fn, *_ = make_scheduler()
     run_scheduler_for(scheduler, 0.2)
     assert sync_fn.calls >= 3
     status = scheduler.status()
@@ -75,13 +94,13 @@ def test_scheduler_ticks_on_interval_when_enabled():
 
 
 def test_disabled_scheduler_never_syncs_but_keeps_running():
-    scheduler, sync_fn, _ = make_scheduler(enabled=False)
+    scheduler, sync_fn, *_ = make_scheduler(enabled=False)
     run_scheduler_for(scheduler, 0.15)
     assert sync_fn.calls == 0
 
 
 def test_draft_day_pause_stops_midstream():
-    scheduler, sync_fn, _ = make_scheduler()
+    scheduler, sync_fn, *_ = make_scheduler()
 
     async def go():
         scheduler.start()
@@ -97,7 +116,7 @@ def test_draft_day_pause_stops_midstream():
 
 
 def test_failed_run_is_recorded_and_loop_survives():
-    scheduler, sync_fn, reminder_fn = make_scheduler(sync_fn=SyncRecorder(fail=True))
+    scheduler, sync_fn, reminder_fn, *_ = make_scheduler(sync_fn=SyncRecorder(fail=True))
     run_scheduler_for(scheduler, 0.2)
     assert sync_fn.calls >= 2  # kept ticking after the failure
     assert "espn is down" in scheduler.status()["last_error"]
@@ -106,7 +125,7 @@ def test_failed_run_is_recorded_and_loop_survives():
 
 def test_reminders_skip_leagues_with_no_known_week():
     leagues = {111: {"week": 5}, 222: {"week": None}}
-    scheduler, sync_fn, reminder_fn = make_scheduler(
+    scheduler, sync_fn, reminder_fn, *_ = make_scheduler(
         sync_fn=SyncRecorder(leagues=leagues)
     )
     asyncio.run(scheduler.run_now())
@@ -114,7 +133,7 @@ def test_reminders_skip_leagues_with_no_known_week():
 
 
 def test_configure_rejects_bad_interval():
-    scheduler, _, _ = make_scheduler()
+    scheduler, *_ = make_scheduler()
     try:
         scheduler.configure(interval_hours=0)
         assert False, "should have raised"
@@ -128,7 +147,7 @@ def test_configure_rejects_bad_interval():
 def test_gameday_interval_used_wednesday_through_sunday():
     for weekday in GAMEDAY_WEEKDAYS:
         fake_now = datetime.datetime(2024, 9, 2 + weekday)  # a Monday + weekday
-        scheduler, _, _ = make_scheduler(
+        scheduler, *_ = make_scheduler(
             interval_hours=24,
             gameday_interval_hours=6,
             now_fn=lambda d=fake_now: d,
@@ -139,12 +158,68 @@ def test_gameday_interval_used_wednesday_through_sunday():
 def test_baseline_interval_used_monday_and_tuesday():
     for weekday in (0, 1):
         fake_now = datetime.datetime(2024, 9, 2 + weekday)
-        scheduler, _, _ = make_scheduler(
+        scheduler, *_ = make_scheduler(
             interval_hours=24,
             gameday_interval_hours=6,
             now_fn=lambda d=fake_now: d,
         )
         assert scheduler.current_interval_hours() == 24
+
+
+# --- usage ingestion wiring (C4's cheap half, off by default) ----------------------
+
+
+def test_usage_ingest_disabled_by_default_never_called():
+    scheduler, _, _, usage_ingest_fn, usage_notify_fn = make_scheduler(
+        sync_fn=SyncRecorder(leagues={111: {"week": 5}})
+    )
+    asyncio.run(scheduler.run_now())
+    assert usage_ingest_fn.calls == []
+    assert usage_notify_fn.calls == []
+
+
+def test_usage_ingest_runs_for_most_recent_completed_week_when_enabled():
+    scheduler, _, _, usage_ingest_fn, usage_notify_fn = make_scheduler(
+        sync_fn=SyncRecorder(leagues={111: {"week": 5}}),
+        usage_ingest_enabled=True,
+    )
+    asyncio.run(scheduler.run_now())
+    # completed week = latest_scoring_period - 1 (usage trails the live week)
+    assert usage_ingest_fn.calls == [(DRAFT_YEAR, 4)]
+    assert usage_notify_fn.calls == [(DRAFT_YEAR, 4)]
+
+
+def test_usage_ingest_uses_min_completed_week_across_leagues():
+    leagues = {111: {"week": 5}, 222: {"week": 3}}
+    scheduler, _, _, usage_ingest_fn, usage_notify_fn = make_scheduler(
+        sync_fn=SyncRecorder(leagues=leagues),
+        usage_ingest_enabled=True,
+    )
+    asyncio.run(scheduler.run_now())
+    # min(5-1, 3-1) = 2 — usage data always trails the least-current league
+    assert usage_ingest_fn.calls == [(DRAFT_YEAR, 2)]
+
+
+def test_usage_ingest_skipped_when_no_league_has_a_completed_week():
+    leagues = {111: {"week": 1}, 222: {"week": None}}
+    scheduler, _, _, usage_ingest_fn, usage_notify_fn = make_scheduler(
+        sync_fn=SyncRecorder(leagues=leagues),
+        usage_ingest_enabled=True,
+    )
+    asyncio.run(scheduler.run_now())
+    # week 1 has no prior completed week (1 - 1 = 0); nothing to ingest
+    assert usage_ingest_fn.calls == []
+    assert usage_notify_fn.calls == []
+
+
+def test_usage_ingest_skipped_when_sync_never_learns_a_week():
+    leagues = {111: {"week": None}}
+    scheduler, _, _, usage_ingest_fn, usage_notify_fn = make_scheduler(
+        sync_fn=SyncRecorder(leagues=leagues),
+        usage_ingest_enabled=True,
+    )
+    asyncio.run(scheduler.run_now())
+    assert usage_ingest_fn.calls == []
 
 
 # --- schedule endpoints -------------------------------------------------------------

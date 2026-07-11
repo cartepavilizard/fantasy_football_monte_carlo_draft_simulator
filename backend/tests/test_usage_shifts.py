@@ -25,6 +25,7 @@ from models.usage_shifts import (
     detect_usage_shifts,
     ensure_usage_shift_notifications,
     relevant_player_names,
+    variance_note,
 )
 
 SEASON = DRAFT_YEAR
@@ -34,7 +35,18 @@ def make_engine():
     return AIOEngine(client=AsyncMongoMockClient(), database="test-usage")
 
 
-def usage(engine, player, week, snap=None, target=None, team="SEA", pos="RB"):
+def usage(
+    engine,
+    player,
+    week,
+    snap=None,
+    target=None,
+    team="SEA",
+    pos="RB",
+    targets=None,
+    carries=None,
+    touches=None,
+):
     return engine.save(
         PlayerWeekUsage(
             season=SEASON,
@@ -44,6 +56,9 @@ def usage(engine, player, week, snap=None, target=None, team="SEA", pos="RB"):
             nfl_team=team,
             snap_share=snap,
             target_share=target,
+            targets=targets,
+            carries=carries,
+            touches=touches,
         )
     )
 
@@ -222,6 +237,55 @@ def test_relevant_names_union_rosters_and_free_agents():
     asyncio.run(seed())
     names = asyncio.run(relevant_player_names(engine, SEASON))
     assert names == {"Rostered Guy", "Pool Guy"}
+
+
+def test_variance_note_flags_high_targets_low_catches():
+    engine = make_engine()
+    # BRAINSTORM §2.9's own example: 9 targets, 1 catch (touches=carries+receptions)
+    row = asyncio.run(
+        usage(engine, "Quiet Game", 5, targets=9, carries=0, touches=1)
+    )
+    note = variance_note(row)
+    assert note == {"targets": 9, "receptions": 1, "catch_rate": round(1 / 9, 4)}
+
+
+def test_variance_note_ignores_token_targets():
+    engine = make_engine()
+    # 2 targets, 0 catches clears the catch-rate ceiling but not the
+    # target floor — a token target isn't a story
+    row = asyncio.run(usage(engine, "Token Target", 5, targets=2, carries=0, touches=0))
+    assert variance_note(row) is None
+
+
+def test_variance_note_ignores_ordinary_efficient_games():
+    engine = make_engine()
+    # 9 targets, 6 catches = 67% catch rate — an ordinary day, not variance
+    row = asyncio.run(usage(engine, "Efficient Day", 5, targets=9, carries=0, touches=6))
+    assert variance_note(row) is None
+
+
+def test_variance_note_needs_carries_and_touches():
+    engine = make_engine()
+    row = asyncio.run(usage(engine, "No Touch Data", 5, targets=9))
+    assert variance_note(row) is None
+
+
+def test_detect_usage_shifts_attaches_variance_to_shift_rows():
+    engine = make_engine()
+
+    async def seed():
+        for week, share in [(2, 0.35), (3, 0.40), (4, 0.36)]:
+            await usage(engine, "Backup Back", week, snap=share)
+        # week 5 carries both the snap-share rise and the quiet-game
+        # targets/touches in one row (a real PlayerWeekUsage doc has
+        # every metric together, never split across two saves)
+        await usage(
+            engine, "Backup Back", 5, snap=0.58, targets=9, carries=0, touches=1
+        )
+
+    asyncio.run(seed())
+    (shift,) = detect(engine, 5)
+    assert shift["variance"] == {"targets": 9, "receptions": 1, "catch_rate": round(1 / 9, 4)}
 
 
 def test_usage_shifts_endpoint_serves_from_cache(client, app_module):

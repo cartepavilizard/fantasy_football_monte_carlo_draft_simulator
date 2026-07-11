@@ -162,6 +162,36 @@ USAGE_BASELINE_MIN_WEEKS = int(os.getenv("USAGE_BASELINE_MIN_WEEKS", 2))
 USAGE_SNAP_FLOOR = float(os.getenv("USAGE_SNAP_FLOOR", 0.15))
 USAGE_TARGET_FLOOR = float(os.getenv("USAGE_TARGET_FLOOR", 0.10))
 
+# Single-game variance flag (Phase C, task C8): distinguishes "quiet box
+# score" from "role change" when a player drew real opportunity (targets)
+# that didn't turn into catches — process-over-results, not a points
+# read. USAGE_VARIANCE_TARGET_FLOOR keeps token-target games out (2
+# targets/0 catches isn't a story); USAGE_VARIANCE_CATCH_RATE_CEILING is
+# loose enough to catch real bad-luck games (9 targets/3 catches = 33%)
+# without flagging an ordinary efficient one.
+USAGE_VARIANCE_TARGET_FLOOR = int(os.getenv("USAGE_VARIANCE_TARGET_FLOOR", 6))
+USAGE_VARIANCE_CATCH_RATE_CEILING = float(
+    os.getenv("USAGE_VARIANCE_CATCH_RATE_CEILING", 0.35)
+)
+
+# Playoff strength of schedule (Phase C, task C5). The fantasy-playoff
+# window whose opponents get summed against C2's defense_position_strength()
+# table; comma-separated so a league running a different bracket can
+# override it without a code change.
+PLAYOFF_SOS_WEEKS = [
+    int(week)
+    for week in os.getenv("PLAYOFF_SOS_WEEKS", "14,15,16").replace(" ", "").split(",")
+    if week
+]
+
+# Usage ingestion (Phase C, task C4's cheap half): the nflverse CSV pull
+# that fills PlayerWeekUsage. Off by default like every scheduled fetch;
+# InSeasonScheduler.run_now only ingests + raises usage-shift alerts
+# when this is on.
+USAGE_INGEST_ENABLED = (
+    os.getenv("USAGE_INGEST_ENABLED", "false").lower() == "true"
+)
+
 # Ranking aggregation settings (Phase 1)
 SCORING_FORMAT = os.getenv("SCORING_FORMAT", "ppr")  # standard | half_ppr | ppr
 try:

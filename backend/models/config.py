@@ -93,6 +93,20 @@ FREE_AGENT_FETCH_LIMIT = int(os.getenv("FREE_AGENT_FETCH_LIMIT", 300))
 FIRST_LOCK_REMINDER_HOURS = float(os.getenv("FIRST_LOCK_REMINDER_HOURS", 24))
 FINAL_LOCK_REMINDER_HOURS = float(os.getenv("FINAL_LOCK_REMINDER_HOURS", 3))
 
+# Scheduled in-season sync (Phase B, task B3). Off by default so dev/test
+# runs never fetch on their own; docker-compose turns it on for the
+# deployed app. Cadence tightens Wednesday-Sunday (game week) so rosters,
+# matchups, and lock reminders stay fresh close to kickoff, and relaxes
+# the rest of the week. Runtime pause/resume via POST /inseason/schedule
+# (draft-day switch), same as the rankings refresh loop.
+INSEASON_SYNC_ENABLED = (
+    os.getenv("INSEASON_SYNC_ENABLED", "false").lower() == "true"
+)
+INSEASON_SYNC_INTERVAL_HOURS = float(os.getenv("INSEASON_SYNC_INTERVAL_HOURS", 24))
+INSEASON_SYNC_GAMEDAY_INTERVAL_HOURS = float(
+    os.getenv("INSEASON_SYNC_GAMEDAY_INTERVAL_HOURS", 6)
+)
+
 # Ranking aggregation settings (Phase 1)
 SCORING_FORMAT = os.getenv("SCORING_FORMAT", "ppr")  # standard | half_ppr | ppr
 try:

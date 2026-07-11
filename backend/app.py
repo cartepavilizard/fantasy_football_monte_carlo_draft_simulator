@@ -25,7 +25,7 @@ import inseason_api
 import notifications_api
 import backtest as backtest_module
 import profiling
-from scheduler import RankingsScheduler
+from scheduler import InSeasonScheduler, RankingsScheduler
 from models import config as app_config
 from models.tendencies import (
     MISS_ADP_AFTER,
@@ -134,6 +134,11 @@ process_pool = ProcessPoolExecutor(max_workers=2)
 # Scheduled rankings refresh (enabled/paced via env and /rankings/schedule)
 rankings_scheduler = RankingsScheduler(lambda: engine)
 
+# Scheduled in-season sync (B3): ESPN league/schedule sync plus lock
+# reminders, paced faster on gamedays. Same draft-day-safe pattern as
+# rankings_scheduler above — paused via POST, one failed run never kills it.
+inseason_scheduler = InSeasonScheduler(lambda: engine)
+
 # Cached-only in-season reads (B4) + notifications (B5). The lambda is
 # late-bound: it resolves this module's `engine` global at call time, so
 # tests that monkeypatch app.engine are honored by the routers too.
@@ -151,6 +156,16 @@ async def start_rankings_scheduler():
 @app.on_event("shutdown")
 async def stop_rankings_scheduler():
     await rankings_scheduler.stop()
+
+
+@app.on_event("startup")
+async def start_inseason_scheduler():
+    inseason_scheduler.start()
+
+
+@app.on_event("shutdown")
+async def stop_inseason_scheduler():
+    await inseason_scheduler.stop()
 
 
 # Include origins for CORS
@@ -1852,3 +1867,30 @@ async def sync_inseason_leagues(
         )
     summary["lock_reminders_created"] = reminders
     return summary
+
+
+@app.get("/inseason/schedule", tags=["inseason"])
+async def get_inseason_schedule():
+    """
+    The scheduled in-season sync state: enabled, interval (gameday vs
+    baseline), next/last run, and the last run's outcome
+    """
+    return inseason_scheduler.status()
+
+
+@app.post("/inseason/schedule", tags=["inseason"])
+async def set_inseason_schedule(
+    enabled: bool = None, interval_hours: float = None
+):
+    """
+    Runtime control of the scheduled in-season sync. The draft-day switch
+    is enabled=false — nothing scheduled ever races a live draft; manual
+    POST /inseason/sync keeps working while paused.
+    """
+    try:
+        inseason_scheduler.configure(
+            enabled=enabled, interval_hours=interval_hours
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return inseason_scheduler.status()

@@ -117,6 +117,26 @@ MATCHUP_PRIOR_GAMES = float(os.getenv("MATCHUP_PRIOR_GAMES", 4))
 MATCHUP_TILT_ALPHA = float(os.getenv("MATCHUP_TILT_ALPHA", 0.5))
 MATCHUP_MAX_TILT = float(os.getenv("MATCHUP_MAX_TILT", 0.10))
 
+# Lineup optimizer (Phase C, task C1). The Thursday-morning pull syncs
+# all leagues then leaves a lineup_review notification, so Thursday
+# decisions are made on fresh data; off by default like every scheduled
+# fetch. ESPN_MY_TEAMS maps league id -> the user's team id (JSON, e.g.
+# '{"111": 3}') so the review can quote that team's optimizer delta;
+# leagues missing from the map get a generic review notification.
+LINEUP_PULL_ENABLED = os.getenv("LINEUP_PULL_ENABLED", "false").lower() == "true"
+LINEUP_PULL_WEEKDAY = int(os.getenv("LINEUP_PULL_WEEKDAY", 3))  # 3 = Thursday
+LINEUP_PULL_HOUR = int(os.getenv("LINEUP_PULL_HOUR", 7))  # local time
+try:
+    ESPN_MY_TEAMS = {
+        int(league_id): int(team_id)
+        for league_id, team_id in json.loads(
+            os.getenv("ESPN_MY_TEAMS", "{}")
+        ).items()
+    }
+except (ValueError, AttributeError):
+    print("WARNING: ESPN_MY_TEAMS is not a valid JSON map; ignoring it")
+    ESPN_MY_TEAMS = {}
+
 # Ranking aggregation settings (Phase 1)
 SCORING_FORMAT = os.getenv("SCORING_FORMAT", "ppr")  # standard | half_ppr | ppr
 try:

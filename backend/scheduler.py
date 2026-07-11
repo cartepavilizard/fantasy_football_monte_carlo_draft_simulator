@@ -21,6 +21,9 @@ from models.config import (
     INSEASON_SYNC_ENABLED,
     INSEASON_SYNC_GAMEDAY_INTERVAL_HOURS,
     INSEASON_SYNC_INTERVAL_HOURS,
+    LINEUP_PULL_ENABLED,
+    LINEUP_PULL_HOUR,
+    LINEUP_PULL_WEEKDAY,
     RANKINGS_REFRESH_ENABLED,
     RANKINGS_REFRESH_INTERVAL_HOURS,
     SCORING_FORMAT,
@@ -258,6 +261,144 @@ class InSeasonScheduler:
             "running": self._task is not None and not self._task.done(),
             "interval_hours": self.interval_hours,
             "gameday_interval_hours": self.gameday_interval_hours,
+            "next_run": next_run,
+            "last_run": self.last_run.isoformat() if self.last_run else None,
+            "last_error": self.last_error,
+            "last_summary": self.last_summary,
+        }
+
+
+class LineupPullScheduler:
+    """
+    The Thursday-morning pull (Phase C, task C1): once a week, at a
+    fixed local weekday/hour ahead of the first lock, sync every league
+    and leave a lineup_review notification per league — so Thursday
+    lineup decisions are made on fresh data even if no one opened the
+    app. Same lifecycle/pause/status conventions as the other two
+    schedulers; unlike them it sleeps until a wall-clock moment, not on
+    an interval.
+    """
+
+    def __init__(
+        self,
+        engine_getter,
+        sync_fn=None,
+        review_fn=None,
+        enabled: Optional[bool] = None,
+        weekday: Optional[int] = None,
+        hour: Optional[int] = None,
+        now_fn=None,
+    ):
+        if sync_fn is None:
+            from data_sources.espn_league import sync_all_leagues
+
+            sync_fn = sync_all_leagues
+        if review_fn is None:
+            from models.lineup import ensure_lineup_review
+
+            review_fn = ensure_lineup_review
+        self._engine_getter = engine_getter  # late-bound: tests swap engines
+        self._sync_fn = sync_fn
+        self._review_fn = review_fn
+        self._now_fn = now_fn or datetime.now
+        self.enabled = LINEUP_PULL_ENABLED if enabled is None else enabled
+        self.weekday = LINEUP_PULL_WEEKDAY if weekday is None else weekday
+        self.hour = LINEUP_PULL_HOUR if hour is None else hour
+        self._task: Optional[asyncio.Task] = None
+        self.last_run: Optional[datetime] = None
+        self.last_error: Optional[str] = None
+        self.last_summary: Optional[dict] = None
+
+    # -- cadence --------------------------------------------------------------
+
+    def seconds_until_next_pull(self) -> float:
+        """Seconds until the next occurrence of (weekday, hour) local time"""
+        now = self._now_fn()
+        target = now.replace(hour=self.hour, minute=0, second=0, microsecond=0)
+        target += timedelta(days=(self.weekday - now.weekday()) % 7)
+        if target <= now:
+            target += timedelta(days=7)
+        return (target - now).total_seconds()
+
+    # -- lifecycle ----------------------------------------------------------
+
+    def start(self):
+        if self._task is None or self._task.done():
+            self._task = asyncio.get_event_loop().create_task(self._loop())
+
+    async def stop(self):
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            self._task = None
+
+    async def _loop(self):
+        while True:
+            await asyncio.sleep(
+                max(MIN_SLEEP_SECONDS, self.seconds_until_next_pull())
+            )
+            if not self.enabled:
+                continue
+            await self.run_now()
+
+    async def run_now(self) -> dict:
+        """One pull: sync everything, then one review notification per
+        league with a known week; failures are recorded, never raised"""
+        self.last_run = datetime.now()
+        try:
+            engine = self._engine_getter()
+            summary = await self._sync_fn(engine, DRAFT_YEAR)
+            reviews = []
+            for espn_league_id, league_summary in summary["leagues"].items():
+                week = league_summary["week"]
+                if week is None:
+                    continue
+                notification = await self._review_fn(
+                    engine, espn_league_id, DRAFT_YEAR, week
+                )
+                if notification is not None:
+                    reviews.append(notification.title)
+            self.last_summary = {"sync": summary, "reviews": reviews}
+            self.last_error = None
+        except Exception as exc:
+            self.last_error = f"{type(exc).__name__}: {exc}"
+            self.last_summary = None
+        return self.status()
+
+    # -- control surface ----------------------------------------------------
+
+    def configure(
+        self,
+        enabled: Optional[bool] = None,
+        weekday: Optional[int] = None,
+        hour: Optional[int] = None,
+    ):
+        if enabled is not None:
+            self.enabled = enabled
+        if weekday is not None:
+            if not 0 <= weekday <= 6:
+                raise ValueError("weekday must be 0 (Monday) through 6 (Sunday)")
+            self.weekday = weekday
+        if hour is not None:
+            if not 0 <= hour <= 23:
+                raise ValueError("hour must be 0 through 23")
+            self.hour = hour
+
+    def status(self) -> dict:
+        next_run = None
+        if self._task is not None and not self._task.done() and self.enabled:
+            next_run = (
+                self._now_fn()
+                + timedelta(seconds=self.seconds_until_next_pull())
+            ).isoformat()
+        return {
+            "enabled": self.enabled,
+            "running": self._task is not None and not self._task.done(),
+            "weekday": self.weekday,
+            "hour": self.hour,
             "next_run": next_run,
             "last_run": self.last_run.isoformat() if self.last_run else None,
             "last_error": self.last_error,

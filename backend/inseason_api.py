@@ -31,6 +31,7 @@ from fastapi import APIRouter, HTTPException
 from odmantic import query
 
 from models.config import DRAFT_YEAR
+from models.lineup import optimize_lineup
 from models.matchup_strength import defense_position_strength
 from models.inseason import (
     FreeAgentSnapshot,
@@ -232,6 +233,32 @@ async def get_free_agents(
         season,
         {"week": week, "free_agents": entries},
     )
+
+
+@router.get("/league/{espn_league_id}/lineup")
+async def get_lineup(
+    espn_league_id: int,
+    espn_team_id: int,
+    week: Optional[int] = None,
+    season: int = DRAFT_YEAR,
+):
+    """
+    The full lineup call (C1): optimal legal lineup for one team-week
+    from ESPN weekly projections with C2's matchup tilt, the moves to
+    get there, per-player matchup context, and C6 lock guidance. Serves
+    entirely from Mongo — freshness comes from the sync paths, and the
+    envelope says how old the data is.
+    """
+    engine = _engine()
+    league = await _league_or_404(engine, espn_league_id, season)
+    week = week or league.latest_scoring_period
+    if not any(team.espn_team_id == espn_team_id for team in league.teams):
+        raise HTTPException(
+            status_code=404,
+            detail=f"No team {espn_team_id} in league {espn_league_id}",
+        )
+    data = await optimize_lineup(engine, league, espn_team_id, week)
+    return await _envelope(engine, espn_league_id, season, data)
 
 
 @router.get("/matchup_strength")

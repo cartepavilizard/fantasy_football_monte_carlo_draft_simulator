@@ -54,6 +54,15 @@ when starting a session for a task):
   that spec — or the frontier session just finishes it if the remainder
   is small.
 
+**Post-Fable update (2026-07-11):** Fable 5 access ends 2026-07-12. The
+last Fable budget was spent on a design-only pass over every remaining
+frontier-grade decision (Phase D/E/F specs — see those rows). From here:
+**[FRONTIER] → Opus 4.8**, implementing against the Fable-authored specs
+where they exist and designing fresh where they don't; [CHEAP]/[SPLIT]
+remainders → Sonnet, unchanged. The specs are the contract: an Opus
+session should treat a spec'd methodology as settled unless it finds a
+concrete defect, in which case it documents the deviation in the task row.
+
 Do not switch models mid-task; one task, one session, one model. And never
 start a [CHEAP] task before the [FRONTIER]/[SPLIT] task it depends on has
 landed its interface.

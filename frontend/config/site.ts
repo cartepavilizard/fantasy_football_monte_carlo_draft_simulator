@@ -20,6 +20,10 @@ export const siteConfig = {
       label: "Draft",
       href: "/draft",
     },
+    {
+      label: "In-Season",
+      href: "/inseason",
+    },
   ],
   navMenuItems: [
     {
@@ -33,6 +37,10 @@ export const siteConfig = {
     {
       label: "Draft",
       href: "/draft",
+    },
+    {
+      label: "In-Season",
+      href: "/inseason",
     },
   ],
   links: {

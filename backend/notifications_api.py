@@ -3,9 +3,11 @@
 NOTIFICATIONS ENDPOINTS (PHASE B, TASK B5 — the contract half)
 
 Two audiences:
-- The in-app panel reads GET /notifications (newest first) and marks
-  rows read. Richer panel CRUD (mark-all-read, delete, kind filters)
-  is the speced cheap half — add it here.
+- The in-app panel reads GET /notifications (newest first, optional
+  `unread_only` / `kind` filters), marks one row read (POST
+  /{id}/read), marks everything read at once (POST /read_all), or
+  deletes a row (DELETE /{id}). All panel state — read/deleted — is
+  independent of the ack/pending contract below.
 - The Claude Routine that pushes to the Android app speaks exactly two
   endpoints: GET /notifications/pending?channel=push and
   POST /notifications/{id}/ack?channel=push. See models/notifications.py
@@ -66,10 +68,19 @@ async def _notification_or_404(engine, notification_id: ObjectId) -> Notificatio
 
 
 @router.get("")
-async def list_notifications(unread_only: bool = False, limit: int = 50):
+async def list_notifications(
+    unread_only: bool = False, kind: Optional[str] = None, limit: int = 50
+):
     """The panel's list: newest first, the durable record"""
     engine = _engine()
-    criteria = Notification.read == False if unread_only else {}  # noqa: E712
+    conditions = []
+    if unread_only:
+        conditions.append(Notification.read == False)  # noqa: E712
+    if kind is not None:
+        conditions.append(Notification.kind == kind)
+    criteria = {}
+    for condition in conditions:
+        criteria = condition if criteria == {} else criteria & condition
     notifications = await engine.find(
         Notification,
         criteria,
@@ -77,6 +88,18 @@ async def list_notifications(unread_only: bool = False, limit: int = 50):
         limit=limit,
     )
     return {"notifications": [_dump(notification) for notification in notifications]}
+
+
+@router.post("/read_all")
+async def mark_all_read():
+    """Panel bulk action: every currently-unread notification becomes read"""
+    engine = _engine()
+    unread = await engine.find(Notification, Notification.read == False)  # noqa: E712
+    for notification in unread:
+        notification.read = True
+    if unread:
+        await engine.save_all(unread)
+    return {"updated": len(unread)}
 
 
 @router.get("/pending")
@@ -115,3 +138,13 @@ async def mark_read(notification_id: ObjectId):
         notification.read = True
         await engine.save(notification)
     return _dump(notification)
+
+
+@router.delete("/{notification_id}")
+async def delete_notification(notification_id: ObjectId):
+    """Removes the durable record entirely; ack/pending state plays no
+    part in whether a notification can be deleted"""
+    engine = _engine()
+    notification = await _notification_or_404(engine, notification_id)
+    await engine.delete(notification)
+    return {"deleted": True}

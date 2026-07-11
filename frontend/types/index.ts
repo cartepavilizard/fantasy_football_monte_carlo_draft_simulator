@@ -403,3 +403,23 @@ export type InSeasonSyncSummary = {
   leagues: Record<string, LeagueSyncSummary>;
   lock_reminders_created: { kind: string; title: string; id: string }[];
 };
+
+// --- Notifications (Phase B, B5): mirrors backend/models/notifications.py
+// Notification and the panel CRUD in backend/notifications_api.py.
+// `read` is panel state (user saw it in-app); `pushed_at` is the
+// Routine's ack (delivered to the phone) — the two stay visually
+// distinct since a pushed item can still be unread in the panel.
+export type Notification = {
+  id: string;
+  kind: string;
+  dedupe_key: string;
+  title: string;
+  body: string;
+  espn_league_id: number | null;
+  season: number | null;
+  week: number | null;
+  event_at: string | null;
+  created_at: string;
+  read: boolean;
+  pushed_at: string | null;
+};

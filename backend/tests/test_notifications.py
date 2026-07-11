@@ -218,3 +218,112 @@ def test_ack_missing_notification_404s(client, app_module):
     assert (
         client.post("/notifications/64b0f0f0f0f0f0f0f0f0f0f0/ack").status_code == 404
     )
+
+
+# --- panel CRUD: mark-all-read, delete, kind filter -------------------------------
+
+
+def seed_mixed_kinds(app_module):
+    engine = app_module.engine
+
+    async def go():
+        first = await ensure_notification(
+            engine,
+            kind="first_lock_reminder",
+            dedupe_key="mix:first",
+            title="first",
+            body="b",
+        )
+        second = await ensure_notification(
+            engine,
+            kind="final_lock_reminder",
+            dedupe_key="mix:final",
+            title="final",
+            body="b",
+        )
+        third = await ensure_notification(
+            engine,
+            kind="first_lock_reminder",
+            dedupe_key="mix:first2",
+            title="first2",
+            body="b",
+        )
+        return first, second, third
+
+    return asyncio.run(go())
+
+
+def test_kind_filter_on_list(client, app_module):
+    first, second, third = seed_mixed_kinds(app_module)
+    listed = client.get("/notifications?kind=first_lock_reminder").json()[
+        "notifications"
+    ]
+    assert [entry["id"] for entry in listed] == [str(third.id), str(first.id)]
+
+    listed = client.get("/notifications?kind=final_lock_reminder").json()[
+        "notifications"
+    ]
+    assert [entry["id"] for entry in listed] == [str(second.id)]
+
+
+def test_kind_filter_combines_with_unread_only(client, app_module):
+    first, second, third = seed_mixed_kinds(app_module)
+    client.post(f"/notifications/{first.id}/read")
+
+    unread_first_kind = client.get(
+        "/notifications?kind=first_lock_reminder&unread_only=true"
+    ).json()["notifications"]
+    assert [entry["id"] for entry in unread_first_kind] == [str(third.id)]
+
+
+def test_mark_all_read(client, app_module):
+    first, second = seed_notifications(app_module)
+    result = client.post("/notifications/read_all").json()
+    assert result["updated"] == 2
+
+    listed = client.get("/notifications").json()["notifications"]
+    assert all(entry["read"] is True for entry in listed)
+    assert client.get("/notifications?unread_only=true").json()["notifications"] == []
+
+    # idempotent: nothing left unread on a second call
+    assert client.post("/notifications/read_all").json()["updated"] == 0
+
+
+def test_mark_all_read_does_not_touch_pushed_at(client, app_module):
+    first, second = seed_notifications(app_module)
+    client.post(f"/notifications/{first.id}/ack?channel=push")
+    client.post("/notifications/read_all")
+
+    listed = {
+        entry["id"]: entry
+        for entry in client.get("/notifications").json()["notifications"]
+    }
+    assert listed[str(first.id)]["pushed_at"] is not None
+    assert listed[str(second.id)]["pushed_at"] is None
+    assert listed[str(first.id)]["read"] is True
+    assert listed[str(second.id)]["read"] is True
+
+
+def test_delete_notification(client, app_module):
+    first, second = seed_notifications(app_module)
+    result = client.delete(f"/notifications/{first.id}")
+    assert result.json() == {"deleted": True}
+
+    listed = client.get("/notifications").json()["notifications"]
+    assert [entry["id"] for entry in listed] == [str(second.id)]
+
+
+def test_delete_missing_notification_404s(client, app_module):
+    assert (
+        client.delete("/notifications/64b0f0f0f0f0f0f0f0f0f0f0").status_code == 404
+    )
+
+
+def test_delete_does_not_disturb_ack_pending_semantics(client, app_module):
+    first, second = seed_notifications(app_module)
+    client.post(f"/notifications/{first.id}/ack?channel=push")
+    client.delete(f"/notifications/{first.id}")
+
+    # the still-pending second notification is unaffected by deleting the first
+    pending = client.get("/notifications/pending?channel=push").json()["pending"]
+    assert [entry["id"] for entry in pending] == [str(second.id)]

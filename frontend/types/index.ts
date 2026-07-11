@@ -222,3 +222,184 @@ export type ScheduleStatus = {
   last_run: string | null;
   last_error: string | null;
 };
+
+// --- In-season (Phase B, B4): cached-only reads mirroring
+// backend/models/inseason.py and backend/inseason_api.py's envelope ---
+
+export type FreshnessSection = {
+  last_success_at: string | null;
+  last_attempt_at: string | null;
+  last_error: string | null;
+  error_kind: string | null;
+  age_seconds: number | null;
+  stale: boolean;
+};
+
+// Per-league freshness from league_freshness(); attached to every
+// /inseason/* response so stale/auth-expired cache never looks fresh
+export type LeagueFreshness = {
+  espn_league_id: number;
+  season: number;
+  sections: Record<string, FreshnessSection>;
+  stale: boolean;
+  auth_expired: boolean;
+  warnings: string[];
+};
+
+// The envelope every /inseason/* GET (besides /overview) returns
+export type InSeasonEnvelope<T> = {
+  data: T;
+  freshness: LeagueFreshness;
+  warnings: string[];
+};
+
+export type LeagueTeamInfo = {
+  espn_team_id: number;
+  name: string;
+  abbrev: string | null;
+  owner_guid: string | null;
+  owner_name: string | null;
+  wins: number;
+  losses: number;
+  ties: number;
+  points_for: number;
+  points_against: number;
+};
+
+export type InSeasonLeague = {
+  espn_league_id: number;
+  season: number;
+  name: string;
+  team_count: number;
+  current_matchup_period: number;
+  latest_scoring_period: number;
+  final_scoring_period: number | null;
+  trade_deadline: string | null;
+  lineup_slot_counts: Record<string, number>;
+  teams: LeagueTeamInfo[];
+  synced_at: string;
+};
+
+export type InSeasonOverviewEntry = {
+  league: InSeasonLeague;
+  freshness: LeagueFreshness;
+  warnings: string[];
+};
+
+// GET /inseason/overview — the league selector + team dropdown's only
+// data source; zero external fetches
+export type InSeasonOverview = {
+  season: number;
+  leagues: InSeasonOverviewEntry[];
+};
+
+export type RosterSlotEntry = {
+  player_id: number;
+  player_name: string;
+  position: string | null;
+  nfl_team: string | null;
+  lineup_slot: string;
+  injury_status: string | null;
+  projected_points: number | null;
+  actual_points: number | null;
+};
+
+export type TeamWeekRoster = {
+  espn_league_id: number;
+  season: number;
+  week: number;
+  espn_team_id: number;
+  entries: RosterSlotEntry[];
+  synced_at: string;
+};
+
+export type WeeklyMatchup = {
+  espn_league_id: number;
+  season: number;
+  week: number;
+  home_team_id: number;
+  away_team_id: number | null;
+  home_points: number;
+  away_points: number;
+  winner: "home" | "away" | "tie" | null;
+  is_playoff: boolean;
+  synced_at: string;
+};
+
+export type MatchupsData = {
+  week: number;
+  matchups: WeeklyMatchup[];
+};
+
+export type TransactionItem = {
+  player_id: number;
+  player_name: string | null;
+  item_type: string;
+  from_team_id: number | null;
+  to_team_id: number | null;
+};
+
+export type LeagueTransaction = {
+  espn_league_id: number;
+  season: number;
+  espn_transaction_id: string;
+  type: string;
+  status: string;
+  week: number | null;
+  team_id: number | null;
+  bid_amount: number | null;
+  processed_at: string | null;
+  items: TransactionItem[];
+  synced_at: string;
+};
+
+export type FreeAgentEntry = {
+  player_id: number;
+  player_name: string;
+  position: string | null;
+  nfl_team: string | null;
+  injury_status: string | null;
+  percent_owned: number | null;
+  projected_points: number | null;
+  season_projection: number | null;
+};
+
+export type FreeAgentsData = {
+  week: number;
+  free_agents: FreeAgentEntry[];
+};
+
+export type WeekLocks = {
+  first_lock: string;
+  final_lock: string;
+  first_game: string;
+  team_locks: Record<string, string>;
+};
+
+export type LocksData = {
+  week: number;
+  locks: WeekLocks | null;
+};
+
+// POST /inseason/sync — the one route that talks to ESPN; loose section
+// typing since counts vary (teams/matchups/players/transactions)
+export type SyncSectionResult = {
+  success: boolean;
+  error?: string;
+  error_kind?: string;
+  [key: string]: unknown;
+};
+
+export type LeagueSyncSummary = {
+  espn_league_id: number;
+  season: number;
+  week: number | null;
+  sections: Record<string, SyncSectionResult>;
+};
+
+export type InSeasonSyncSummary = {
+  season: number;
+  pro_schedule: SyncSectionResult;
+  leagues: Record<string, LeagueSyncSummary>;
+  lock_reminders_created: { kind: string; title: string; id: string }[];
+};

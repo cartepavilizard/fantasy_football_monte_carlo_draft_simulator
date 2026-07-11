@@ -533,6 +533,29 @@ async def sync_league(
     # makes transaction items human-readable
     player_names: Dict[int, str] = {}
 
+    # Backfill the just-completed week's rosters first (C2 reads actual
+    # points per completed week; without this, a week's stored actuals
+    # freeze at whatever the last sync DURING that week saw — usually
+    # missing Sunday/Monday-night finals). Logged under the same
+    # "rosters" section; the current-week fetch below logs after it, so
+    # freshness always reflects the current week's outcome.
+    if week > 1:
+        try:
+            previous = await adapter.fetch_rosters(espn_league_id, season, week - 1)
+            await engine.get_collection(TeamWeekRoster).delete_many(
+                {
+                    "espn_league_id": espn_league_id,
+                    "season": season,
+                    "week": week - 1,
+                }
+            )
+            await engine.save_all(previous)
+            await _log(engine, espn_league_id, season, "rosters", week=week - 1)
+        except Exception as exc:
+            await _log(
+                engine, espn_league_id, season, "rosters", week=week - 1, error=exc
+            )
+
     try:
         rosters = await adapter.fetch_rosters(espn_league_id, season, week)
         await engine.get_collection(TeamWeekRoster).delete_many(

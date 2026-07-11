@@ -107,6 +107,16 @@ INSEASON_SYNC_GAMEDAY_INTERVAL_HOURS = float(
     os.getenv("INSEASON_SYNC_GAMEDAY_INTERVAL_HOURS", 6)
 )
 
+# Matchup strength (Phase C, task C2). The observed points-allowed ratio
+# is shrunk toward neutral with a prior worth MATCHUP_PRIOR_GAMES weeks
+# of evidence (week 1 = fully neutral by construction), and C1 applies
+# it as a capped tilt — alpha * (multiplier - 1), never more than
+# MATCHUP_MAX_TILT — because ESPN's weekly projections already price
+# the opponent to some degree (full weight would double-count).
+MATCHUP_PRIOR_GAMES = float(os.getenv("MATCHUP_PRIOR_GAMES", 4))
+MATCHUP_TILT_ALPHA = float(os.getenv("MATCHUP_TILT_ALPHA", 0.5))
+MATCHUP_MAX_TILT = float(os.getenv("MATCHUP_MAX_TILT", 0.10))
+
 # Ranking aggregation settings (Phase 1)
 SCORING_FORMAT = os.getenv("SCORING_FORMAT", "ppr")  # standard | half_ppr | ppr
 try:

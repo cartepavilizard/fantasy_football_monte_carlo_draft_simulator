@@ -31,6 +31,7 @@ from fastapi import APIRouter, HTTPException
 from odmantic import query
 
 from models.config import DRAFT_YEAR
+from models.matchup_strength import defense_position_strength
 from models.inseason import (
     FreeAgentSnapshot,
     InSeasonLeague,
@@ -231,6 +232,34 @@ async def get_free_agents(
         season,
         {"week": week, "free_agents": entries},
     )
+
+
+@router.get("/matchup_strength")
+async def get_matchup_strength(
+    position: Optional[str] = None,
+    through_week: Optional[int] = None,
+    season: int = DRAFT_YEAR,
+):
+    """
+    Opponent-vs-position strength across all synced leagues (C2).
+    League-independent by construction — ratios are normalized inside
+    each league before aggregation — and computed entirely from Mongo,
+    so it inherits the cached-only constraint. Week 1 returns neutral
+    multipliers with confidence "none"; see models/matchup_strength.py
+    for the methodology contract.
+    """
+    engine = _engine()
+    strength = await defense_position_strength(
+        engine, season, through_week=through_week
+    )
+    if position is not None:
+        wanted = position.upper()
+        if wanted not in strength["positions"]:
+            raise HTTPException(
+                status_code=404, detail=f"Unknown position {position}"
+            )
+        strength["positions"] = {wanted: strength["positions"][wanted]}
+    return strength
 
 
 @router.get("/league/{espn_league_id}/locks")

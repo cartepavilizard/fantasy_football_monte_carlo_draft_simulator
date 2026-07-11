@@ -116,12 +116,20 @@ every section OK — 10/12/12-team leagues, 70/84/84 matchups, 300 free
 agents each, plus the 272-game 2026 pro schedule for lock times; freshness
 clean on all sections; `auth_expired=false`. That closes exit criteria 1–2
 (three leagues syncing; cached-only perspective reads are enforced
-structurally and test-guarded). The one open criterion is the real Claude
-Routine push, which is blocked on deployment, not code: this dev machine
-has no MongoDB or Docker, so the backend cannot run persistently here, and
-a Routine needs the API reachable from where it runs. Decide the hosting
-story (install Docker/Mongo locally vs. a small always-on box) before the
-season — it also gates the B3 scheduler actually running on cadence.
+structurally and test-guarded).
+
+**Hosting resolved (2026-07-10):** MongoDB **7.0.28** now runs as an
+auto-start Windows service on the dev laptop (8.x does not support
+Windows 10 — that was the failed-install mystery; do not upgrade past 7.0
+on this machine). Docker stays unnecessary: the stack runs natively
+(Mongo service + uvicorn + Next). All three leagues are synced into the
+real `fantasy-football` database, and `ensure_lock_reminders` was
+exercised against it (0 created — September kickoffs are outside July
+lead windows, as designed). The one open exit criterion remains the live
+Routine push to the phone, now unblocked: it needs (a) the backend
+running on a schedule or at boot, and (b) a scheduled Claude task that
+polls `/notifications/pending` and pushes — set both up closer to the
+season alongside enabling `INSEASON_SYNC_ENABLED`.
 
 ---
 

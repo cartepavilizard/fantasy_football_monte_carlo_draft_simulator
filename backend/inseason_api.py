@@ -31,6 +31,12 @@ from fastapi import APIRouter, HTTPException
 from odmantic import query
 
 from models.config import DRAFT_YEAR
+from models.handcuffs import (
+    delete_handcuff,
+    list_handcuffs,
+    seed_handcuffs,
+    upsert_handcuff,
+)
 from models.lineup import optimize_lineup
 from models.matchup_strength import defense_position_strength
 from models.usage_shifts import detect_usage_shifts
@@ -288,6 +294,46 @@ async def get_matchup_strength(
             )
         strength["positions"] = {wanted: strength["positions"][wanted]}
     return strength
+
+
+# --- handcuff map (C7): curated, Mongo-only, no external calls ---------------
+
+
+@router.get("/handcuffs")
+async def get_handcuffs():
+    """The starter -> direct-backup map (C7), sorted by starter"""
+    pairs = await list_handcuffs(_engine())
+    return {"handcuffs": [pair.model_dump(exclude={"id"}) for pair in pairs]}
+
+
+@router.post("/handcuffs")
+async def set_handcuff(
+    starter_name: str,
+    handcuff_name: str,
+    nfl_team: Optional[str] = None,
+    note: Optional[str] = None,
+):
+    """Create or repoint one mapping (marked manual; survives re-seeds)"""
+    pair = await upsert_handcuff(
+        _engine(), starter_name, handcuff_name, nfl_team=nfl_team, note=note
+    )
+    return pair.model_dump(exclude={"id"})
+
+
+@router.post("/handcuffs/seed")
+async def seed_handcuff_table():
+    """Insert missing seed pairs; never touches existing/manual rows"""
+    return await seed_handcuffs(_engine())
+
+
+@router.delete("/handcuffs/{starter_name}")
+async def remove_handcuff(starter_name: str):
+    """Delete one mapping (e.g. a backfield that became a committee)"""
+    if not await delete_handcuff(_engine(), starter_name):
+        raise HTTPException(
+            status_code=404, detail=f"No handcuff mapping for {starter_name}"
+        )
+    return {"deleted": starter_name}
 
 
 @router.get("/usage_shifts")

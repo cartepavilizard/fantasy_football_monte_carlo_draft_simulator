@@ -388,5 +388,137 @@ designed, not a contradiction to smooth over.
 - **No async in the per-evaluation path** (E2 depends on it).
 - Tests: unit-test the pure functions with hand-built contexts (no
   Mongo), plus endpoint tests through the in-memory engine per
-  `test_inseason_api.py` patterns. Worked-example numbers above should
-  appear as test assertions (tolerances ±0.1).
+  `test_inseason_api.py` patterns. Worked-example numbers above and in
+  Appendix A should appear as test assertions (tolerances ±0.1).
+
+---
+
+## Appendix A — Additional worked examples (normative test fixtures)
+
+All examples share the §7 setup unless stated: `w0=8`, horizon 8–16,
+`H=9`, `rr(WR)=7.8`, `rr(RB)=6.9`, `rr(K)=7.9`, matchup tilts omitted
+(neutral) so the arithmetic is exactly checkable. The implementing
+session should turn each lettered example into at least one test.
+
+### A.1 — Questionable-week granularity
+
+Player X (WR, rate 12.4, bye week 11) from §7, but tagged
+`questionable` at `w0`:
+
+```
+avail: w8 = 0.75, w9+ = 1.0
+gross = 12.4 × (0.75 + 7 healthy played weeks) = 12.4 × 7.75 = 96.1
+value = 96.1 − 7.8 × 9 = 25.9        (healthy X was 29.9 with tilts, 29.6 without)
+```
+
+One questionable tag costs ~3.1 ROS points — a real but small haircut.
+Assert: a `questionable` player is never valued like an `out` one
+(same X tagged `out`: gross = 12.4 × (0 + 0.75 + 6) = 83.7 → value
+13.5; the difference between Q and OUT here is ~12 points, which is
+why effective-status precedence (§3.2) matters).
+
+### A.2 — Availability override moves value the right amount
+
+Player Y (RB on IR, rate 14.0, bye week 13) from §7 graded 0.0 in the
+10-team league. User learns (D3 note, manually trusted) he returns
+week 10, not week 11:
+
+```
+override: {w8: 0, w9: 0, w10: 0.8, w11: 0.8, ...}
+gross = 14.0 × 0.8 × 6 played return weeks (10,11,12,14,15,16) = 67.2
+value = 67.2 − 62.1 = 5.1            (was 0.0 floored; one extra week ≈ +11.2 gross)
+```
+
+Assert both the new value and that the un-overridden context is
+untouched (overrides are per-call, never persisted).
+
+### A.3 — Kicker gravity
+
+K, rate 8.3: `value = max((8.3 − 7.9) × 9, 0) = 3.6`. Assert < 5:
+kickers must grade as throw-ins, or the replacement logic is broken.
+
+### A.4 — 2-for-1 consolidation: fair on market, lopsided on fit
+
+The example that justifies the two-lens design. Roster slice
+(bye-free, tilt-free for checkability):
+
+- **Team A** starts 3 WR (rates 12.4, 10.0, 9.5; no WR bench) and
+  2 RB (14.0, 10.0; bench RB 9.2).
+- **Team B** starts 3 WR (16.5, 8.0, 6.5; bench WR 6.0) and
+  2 RB (11.0, 5.9; no RB bench).
+- **Trade:** A sends WR-12.4 + RB-10.0; B sends WR-16.5.
+
+Market lens:
+
+```
+value_sent_A = (12.4−7.8)×9 + (10.0−6.9)×9 = 41.4 + 27.9 = 69.3
+value_sent_B = (16.5−7.8)×9 = 78.3
+market_gap   = −9.0;  fair_bound = max(10, 0.15×78.3) = 11.7  → "fair"
+```
+
+Fit lens (per-week starting deltas × 9, `BENCH_FACTOR` on the bench):
+
+```
+A: WR 31.9 → 36.0 (+4.1/wk), RB 24.0 → 23.2 (−0.8/wk, bench 9.2 promoted)
+   starting Δ = +3.3/wk × 9 = +29.7
+   bench Δ    = loses 0.15 × max(9.2−6.9, 0) × 9 = −3.1
+   fit_delta_A = +26.6
+B: WR 31.0 → 26.9 (−4.1/wk), RB 16.9 → 21.0 (+4.1/wk)
+   starting Δ = 0.0/wk; bench Δ ≈ 0 (all bench below replacement)
+   fit_delta_B ≈ 0.0   (+ roster_size_note: B ends one player over)
+```
+
+A market-fair trade where A gains +26.6 and B breaks even: B converted
+a WR surplus into an RB need and got nothing extra for brokering A’s
+consolidation. The `summary` must surface this (“fair on value; the
+lineup math favors you by ~3 points/week — expect them to want a
+sweetener”), and it is exactly the state E2’s counter search starts
+from. Assert all six numbers.
+
+### A.5 — Week-1 fallback chain
+
+`w0=1`, no completed weeks stored. Player with only a current-week
+projection (11.0): `rate = 11.0` (fallback 1). FA with no weekly
+number but `season_projection = 153.0`: `rate = 9.0` (fallback 2).
+Player with neither: `rate = 0.0` + warning (fallback 3). All
+multipliers neutral (C2 note passes through), horizon 1–16, `H=16`.
+Assert the chain order and the warnings.
+
+### A.6 — Full response fixture (§7 trade, JSON)
+
+The X-for-Y evaluation from §7 must serialize exactly like this
+(ids/names illustrative; numbers per §7 with tilts):
+
+```json
+{
+  "week": 8, "weeks_remaining": 9,
+  "teams": {"a": {"espn_team_id": 3, "name": "My Team"},
+             "b": {"espn_team_id": 7, "name": "Big Truss"}},
+  "sends_a": [{
+    "player_id": 101, "name": "X", "position": "WR", "nfl_team": "DET",
+    "injury_status": null, "rate": 12.4, "gross": 100.1,
+    "value": 29.9, "playoff_value": 14.2, "per_week": 3.3,
+    "stash_note": null, "warnings": []
+  }],
+  "sends_b": [{
+    "player_id": 202, "name": "Y", "position": "RB", "nfl_team": "SEA",
+    "injury_status": "injury_reserve", "rate": 14.0, "gross": 56.4,
+    "value": 0.0, "playoff_value": 13.1, "per_week": 0.0,
+    "stash_note": "on IR, projected back ~week 11; 56.4 raw pts incl. 33.8 in the playoff window — stash value only if you can afford the spot",
+    "warnings": []
+  }],
+  "value_sent_a": 29.9, "value_sent_b": 0.0,
+  "market_gap": 29.9, "fair_bound": 10.0, "verdict": "favors_b",
+  "fit_delta_a": 4.1, "fit_delta_b": 18.7,
+  "fit_per_week_a": 0.5, "fit_per_week_b": 2.1,
+  "summary": "You send 29.9 more ROS points of market value (about 3.3/week) — outside the fair range. The stash math softens it: Y projects 33.8 raw points across weeks 14–16 once he returns, and your lineup still comes out +0.5/week. Verdict: favors them on value; only worth it if you're playing for the playoff weeks.",
+  "warnings": []
+}
+```
+
+(`playoff_value` for Y: playoff-window gross 14.0×0.8×3 = 33.6±tilt →
+33.8 raw; minus rr×3 = 20.7 → 13.1. Note `playoff_value` is computed from its own
+window per §4.1 and is NOT zeroed just because the headline `value`
+floored to 0 — the playoff component is the *reason* a zero-market
+player is still tradeable, so deriving it from the floored headline
+would erase the one number that matters. Make this a test.)

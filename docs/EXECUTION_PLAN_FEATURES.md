@@ -204,7 +204,7 @@ Contextual flags, **not hard rules** — surfaced inline where relevant.
 
 | # | Task | Routing | Notes |
 | --- | --- | --- | --- |
-| F1 | **Stacking awareness**: flag QB + pass-catcher correlation opportunities in draft suggestions and trade evaluations. | [SPLIT] | Frontier sets the correlation weighting; cheaper model adds the flags at existing call sites. |
+| F1 | **Stacking awareness**: flag QB + pass-catcher correlation opportunities in draft suggestions and trade evaluations. | [SPLIT] → **[Sonnet]** | **Frontier half done — correlation weights spec'd (2026-07-11, Fable design pass): [`docs/specs/F1-stacking-correlation.md`](./specs/F1-stacking-correlation.md).** Fixed ρ table (QB+WR 0.40, QB+TE 0.35, mild rows for honesty), σ ≈ 0.45 × weekly projection, flag quotes "extra weekly swing" points; two call sites (draft `suggested` map, E1 trade report decoration); provably zero effect on any ranking or verdict. Sonnet adds the flags verbatim (trade call site after E1 lands). |
 | F2 | **Bye week planning**: warn on bye clustering at draft time; preview thin weeks in-season. | [CHEAP] | Schedule joins over data B1 already has. |
 | F3 | **Anti-correlation awareness**: flag rostering players who compete for the same touches (same-backfield RBs outside the C7 handcuff case). | [CHEAP] | Reuses C7's depth relationships with an inverted lens. |
 

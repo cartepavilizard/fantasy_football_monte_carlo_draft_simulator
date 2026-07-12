@@ -178,12 +178,14 @@ def test_cached_only_modules_never_import_data_sources():
     import notifications_api
     from models import inseason as inseason_models
     from models import notifications as notification_models
+    from models import trade_valuation as trade_valuation_models
 
     for module in (
         inseason_api,
         notifications_api,
         inseason_models,
         notification_models,
+        trade_valuation_models,  # E1: joins the cached-only club
     ):
         tree = ast.parse(inspect.getsource(module))
         for node in ast.walk(tree):
@@ -222,6 +224,7 @@ def test_every_inseason_get_serves_with_the_network_rigged_to_explode(
         f"/inseason/league/{LEAGUE_ID}/locks",
         f"/inseason/league/{LEAGUE_ID}/lineup?espn_team_id=1",
         f"/inseason/league/{LEAGUE_ID}/streaming",
+        f"/inseason/league/{LEAGUE_ID}/player_values?espn_team_id=1",
         "/inseason/matchup_strength",
         "/inseason/playoff_sos",
         f"/inseason/playoff_sos?espn_league_id={LEAGUE_ID}",
@@ -233,6 +236,12 @@ def test_every_inseason_get_serves_with_the_network_rigged_to_explode(
     ]:
         response = client.get(url)
         assert response.status_code == 200, f"{url}: {response.text}"
+    # the trade evaluator is a POST, but it too is pure Mongo reads
+    evaluate = client.post(
+        f"/inseason/league/{LEAGUE_ID}/trade/evaluate",
+        json={"team_a": 1, "team_b": 2, "sends_a": [100], "sends_b": [200]},
+    )
+    assert evaluate.status_code == 200, evaluate.text
 
 
 # --- reads ----------------------------------------------------------------------

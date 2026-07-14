@@ -192,6 +192,18 @@ USAGE_INGEST_ENABLED = (
     os.getenv("USAGE_INGEST_ENABLED", "false").lower() == "true"
 )
 
+# Practice-report ingestion (Phase D, task D2's cheap half): the nflverse
+# injuries CSV pull that fills PracticeReport/InjuryDesignation. Off by
+# default like every scheduled fetch. UNMAPPED_TRIPWIRE is the fraction of
+# non-blank practice_status values that may fail PARTICIPATION_MAP before
+# an ingest is treated as a parse failure (nothing written) and a
+# format-change notification fires instead of silently dropping rows —
+# see data_sources/nflverse_injuries.py for the full contract.
+PRACTICE_INGEST_ENABLED = (
+    os.getenv("PRACTICE_INGEST_ENABLED", "false").lower() == "true"
+)
+UNMAPPED_TRIPWIRE = float(os.getenv("UNMAPPED_TRIPWIRE", 0.2))
+
 # Ranking aggregation settings (Phase 1)
 SCORING_FORMAT = os.getenv("SCORING_FORMAT", "ppr")  # standard | half_ppr | ppr
 try:

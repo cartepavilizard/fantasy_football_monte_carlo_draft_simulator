@@ -25,7 +25,7 @@ an explicit POST in app.py instead.
 Engine binding: app.py calls configure() with a late-bound getter so
 tests that swap app.engine (conftest) are honored automatically.
 """
-from typing import Callable, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
 from odmantic import query
@@ -45,8 +45,10 @@ from models.streaming import streaming_recommendations
 from models.usage_shifts import detect_usage_shifts
 from models.inseason import (
     FreeAgentSnapshot,
+    InjuryDesignation,
     InSeasonLeague,
     LeagueTransaction,
+    PracticeReport,
     ProGame,
     TeamWeekRoster,
     WeeklyMatchup,
@@ -424,6 +426,51 @@ async def get_usage_shifts(week: int, season: int = DRAFT_YEAR):
         "season": season,
         "week": week,
         "shifts": await detect_usage_shifts(engine, season, week),
+    }
+
+
+@router.get("/practice_reports")
+async def get_practice_reports(
+    week: Optional[int] = None,
+    player: Optional[str] = None,
+    season: int = DRAFT_YEAR,
+):
+    """
+    Practice-participation trail and current game-status designations
+    (D2): the early signal ahead of ESPN's own injury_status field,
+    straight from the ingested PracticeReport/InjuryDesignation rows in
+    Mongo. League-independent, same shape as /inseason/usage_shifts —
+    no fetch is ever triggered by this GET.
+    """
+    engine = _engine()
+    report_criteria = PracticeReport.season == season
+    if week is not None:
+        report_criteria = report_criteria & (PracticeReport.week == week)
+    if player is not None:
+        report_criteria = report_criteria & (PracticeReport.player_name == player)
+    reports = await engine.find(
+        PracticeReport, report_criteria, sort=query.desc(PracticeReport.report_date)
+    )
+    grouped: Dict[str, List[dict]] = {}
+    for report in reports:
+        grouped.setdefault(report.player_name, []).append(
+            report.model_dump(exclude={"id"})
+        )
+
+    designation_criteria = InjuryDesignation.season == season
+    if week is not None:
+        designation_criteria = designation_criteria & (InjuryDesignation.week == week)
+    if player is not None:
+        designation_criteria = designation_criteria & (
+            InjuryDesignation.player_name == player
+        )
+    designations = await engine.find(InjuryDesignation, designation_criteria)
+
+    return {
+        "season": season,
+        "week": week,
+        "reports": grouped,
+        "designations": [d.model_dump(exclude={"id"}) for d in designations],
     }
 
 

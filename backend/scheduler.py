@@ -24,6 +24,7 @@ from models.config import (
     LINEUP_PULL_ENABLED,
     LINEUP_PULL_HOUR,
     LINEUP_PULL_WEEKDAY,
+    PRACTICE_INGEST_ENABLED,
     RANKINGS_REFRESH_ENABLED,
     RANKINGS_REFRESH_INTERVAL_HOURS,
     SCORING_FORMAT,
@@ -153,8 +154,10 @@ class InSeasonScheduler:
         reminder_fn=None,
         usage_ingest_fn=None,
         usage_notify_fn=None,
+        practice_ingest_fn=None,
         enabled: Optional[bool] = None,
         usage_ingest_enabled: Optional[bool] = None,
+        practice_ingest_enabled: Optional[bool] = None,
         interval_hours: Optional[float] = None,
         gameday_interval_hours: Optional[float] = None,
         now_fn=None,
@@ -175,17 +178,27 @@ class InSeasonScheduler:
             from models.usage_shifts import ensure_usage_shift_notifications
 
             usage_notify_fn = ensure_usage_shift_notifications
+        if practice_ingest_fn is None:
+            from data_sources.nflverse_injuries import ingest_practice_reports
+
+            practice_ingest_fn = ingest_practice_reports
         self._engine_getter = engine_getter  # late-bound: tests swap engines
         self._sync_fn = sync_fn
         self._reminder_fn = reminder_fn
         self._usage_ingest_fn = usage_ingest_fn
         self._usage_notify_fn = usage_notify_fn
+        self._practice_ingest_fn = practice_ingest_fn
         self._now_fn = now_fn or datetime.now  # swappable: tests fake weekday
         self.enabled = (
             INSEASON_SYNC_ENABLED if enabled is None else enabled
         )
         self.usage_ingest_enabled = (
             USAGE_INGEST_ENABLED if usage_ingest_enabled is None else usage_ingest_enabled
+        )
+        self.practice_ingest_enabled = (
+            PRACTICE_INGEST_ENABLED
+            if practice_ingest_enabled is None
+            else practice_ingest_enabled
         )
         self.interval_hours = (
             INSEASON_SYNC_INTERVAL_HOURS if interval_hours is None else interval_hours
@@ -240,22 +253,31 @@ class InSeasonScheduler:
         usage data and raises usage-shift alerts for the most recently
         COMPLETED week — usage data always trails the live week, so
         that's min(latest_scoring_period - 1) across every synced
-        league with a known week, never the in-progress week itself."""
+        league with a known week, never the in-progress week itself.
+        When practice_ingest_enabled (D2), also pulls nflverse practice
+        reports for every distinct LIVE week across synced leagues —
+        unlike usage, practice reports are about the upcoming game
+        week, not a completed one."""
         self.last_run = datetime.now()
         try:
             engine = self._engine_getter()
             summary = await self._sync_fn(engine, DRAFT_YEAR)
             completed_weeks = []
+            live_weeks = set()
             for espn_league_id, league_summary in summary["leagues"].items():
                 week = league_summary["week"]
                 if week is not None:
                     await self._reminder_fn(engine, espn_league_id, DRAFT_YEAR, week)
                     completed_weeks.append(week - 1)
+                    live_weeks.add(week)
             if self.usage_ingest_enabled and completed_weeks:
                 usage_week = min(completed_weeks)
                 if usage_week >= 1:
                     await self._usage_ingest_fn(engine, DRAFT_YEAR, usage_week)
                     await self._usage_notify_fn(engine, DRAFT_YEAR, usage_week)
+            if self.practice_ingest_enabled:
+                for week in sorted(live_weeks):
+                    await self._practice_ingest_fn(engine, DRAFT_YEAR, week)
             self.last_summary = summary
             self.last_error = None
         except Exception as exc:

@@ -50,6 +50,17 @@ class UsageRecorder:
         return {}
 
 
+class PracticeRecorder:
+    """Stands in for ingest_practice_reports"""
+
+    def __init__(self):
+        self.calls = []
+
+    async def __call__(self, engine, season, week):
+        self.calls.append((season, week))
+        return {}
+
+
 def run_scheduler_for(scheduler, seconds):
     async def go():
         scheduler.start()
@@ -64,6 +75,7 @@ def make_scheduler(**kwargs):
     reminder_fn = kwargs.pop("reminder_fn", None) or ReminderRecorder()
     usage_ingest_fn = kwargs.pop("usage_ingest_fn", None) or UsageRecorder()
     usage_notify_fn = kwargs.pop("usage_notify_fn", None) or UsageRecorder()
+    practice_ingest_fn = kwargs.pop("practice_ingest_fn", None) or PracticeRecorder()
     kwargs.setdefault("enabled", True)
     kwargs.setdefault("interval_hours", 0.03 / 3600)
     # both cadences tiny by default so lifecycle tests tick regardless of
@@ -76,9 +88,17 @@ def make_scheduler(**kwargs):
         reminder_fn=reminder_fn,
         usage_ingest_fn=usage_ingest_fn,
         usage_notify_fn=usage_notify_fn,
+        practice_ingest_fn=practice_ingest_fn,
         **kwargs,
     )
-    return scheduler, sync_fn, reminder_fn, usage_ingest_fn, usage_notify_fn
+    return (
+        scheduler,
+        sync_fn,
+        reminder_fn,
+        usage_ingest_fn,
+        usage_notify_fn,
+        practice_ingest_fn,
+    )
 
 
 def test_scheduler_ticks_on_interval_when_enabled():
@@ -170,7 +190,7 @@ def test_baseline_interval_used_monday_and_tuesday():
 
 
 def test_usage_ingest_disabled_by_default_never_called():
-    scheduler, _, _, usage_ingest_fn, usage_notify_fn = make_scheduler(
+    scheduler, _, _, usage_ingest_fn, usage_notify_fn, _ = make_scheduler(
         sync_fn=SyncRecorder(leagues={111: {"week": 5}})
     )
     asyncio.run(scheduler.run_now())
@@ -179,7 +199,7 @@ def test_usage_ingest_disabled_by_default_never_called():
 
 
 def test_usage_ingest_runs_for_most_recent_completed_week_when_enabled():
-    scheduler, _, _, usage_ingest_fn, usage_notify_fn = make_scheduler(
+    scheduler, _, _, usage_ingest_fn, usage_notify_fn, _ = make_scheduler(
         sync_fn=SyncRecorder(leagues={111: {"week": 5}}),
         usage_ingest_enabled=True,
     )
@@ -191,7 +211,7 @@ def test_usage_ingest_runs_for_most_recent_completed_week_when_enabled():
 
 def test_usage_ingest_uses_min_completed_week_across_leagues():
     leagues = {111: {"week": 5}, 222: {"week": 3}}
-    scheduler, _, _, usage_ingest_fn, usage_notify_fn = make_scheduler(
+    scheduler, _, _, usage_ingest_fn, usage_notify_fn, _ = make_scheduler(
         sync_fn=SyncRecorder(leagues=leagues),
         usage_ingest_enabled=True,
     )
@@ -202,7 +222,7 @@ def test_usage_ingest_uses_min_completed_week_across_leagues():
 
 def test_usage_ingest_skipped_when_no_league_has_a_completed_week():
     leagues = {111: {"week": 1}, 222: {"week": None}}
-    scheduler, _, _, usage_ingest_fn, usage_notify_fn = make_scheduler(
+    scheduler, _, _, usage_ingest_fn, usage_notify_fn, _ = make_scheduler(
         sync_fn=SyncRecorder(leagues=leagues),
         usage_ingest_enabled=True,
     )
@@ -214,12 +234,61 @@ def test_usage_ingest_skipped_when_no_league_has_a_completed_week():
 
 def test_usage_ingest_skipped_when_sync_never_learns_a_week():
     leagues = {111: {"week": None}}
-    scheduler, _, _, usage_ingest_fn, usage_notify_fn = make_scheduler(
+    scheduler, _, _, usage_ingest_fn, usage_notify_fn, _ = make_scheduler(
         sync_fn=SyncRecorder(leagues=leagues),
         usage_ingest_enabled=True,
     )
     asyncio.run(scheduler.run_now())
     assert usage_ingest_fn.calls == []
+
+
+# --- practice-report ingestion wiring (D2's cheap half, off by default) -----------
+
+
+def test_practice_ingest_disabled_by_default_never_called():
+    scheduler, _, _, _, _, practice_ingest_fn = make_scheduler(
+        sync_fn=SyncRecorder(leagues={111: {"week": 5}})
+    )
+    asyncio.run(scheduler.run_now())
+    assert practice_ingest_fn.calls == []
+
+
+def test_practice_ingest_runs_for_the_live_week_when_enabled():
+    scheduler, _, _, _, _, practice_ingest_fn = make_scheduler(
+        sync_fn=SyncRecorder(leagues={111: {"week": 5}}),
+        practice_ingest_enabled=True,
+    )
+    asyncio.run(scheduler.run_now())
+    # unlike usage (which trails), practice reports are about the live week
+    assert practice_ingest_fn.calls == [(DRAFT_YEAR, 5)]
+
+
+def test_practice_ingest_covers_every_distinct_live_week_across_leagues():
+    leagues = {111: {"week": 5}, 222: {"week": 3}}
+    scheduler, _, _, _, _, practice_ingest_fn = make_scheduler(
+        sync_fn=SyncRecorder(leagues=leagues),
+        practice_ingest_enabled=True,
+    )
+    asyncio.run(scheduler.run_now())
+    assert practice_ingest_fn.calls == [(DRAFT_YEAR, 3), (DRAFT_YEAR, 5)]
+
+
+def test_practice_ingest_skipped_when_sync_never_learns_a_week():
+    leagues = {111: {"week": None}}
+    scheduler, _, _, _, _, practice_ingest_fn = make_scheduler(
+        sync_fn=SyncRecorder(leagues=leagues),
+        practice_ingest_enabled=True,
+    )
+    asyncio.run(scheduler.run_now())
+    assert practice_ingest_fn.calls == []
+
+
+def test_practice_ingest_never_reached_when_sync_fails():
+    scheduler, _, _, _, _, practice_ingest_fn = make_scheduler(
+        sync_fn=SyncRecorder(fail=True), practice_ingest_enabled=True
+    )
+    asyncio.run(scheduler.run_now())
+    assert practice_ingest_fn.calls == []
 
 
 # --- schedule endpoints -------------------------------------------------------------

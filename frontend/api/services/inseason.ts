@@ -16,6 +16,7 @@ import {
   PlayoffSosData,
   StreamingData,
   TeamWeekRoster,
+  TradeWillingnessData,
   UsageShiftsData,
 } from "@/types";
 
@@ -141,6 +142,23 @@ export const inseasonApi = createApi({
         url: `${inseasonUrl}/league/${leagueId}/streaming`,
         params: {
           ...(week != null && { week }),
+          ...(season != null && { season }),
+        },
+      }),
+      providesTags: (result, error, { leagueId }) => [
+        { type: "InSeasonLeague", id: leagueId },
+      ],
+    }),
+
+    // E3: per-owner trade-willingness profiles for one league, sorted
+    // most-willing first. Mongo-only like every other query in this file.
+    getTradeWillingness: builder.query<
+      InSeasonEnvelope<TradeWillingnessData>,
+      { leagueId: number; season?: number }
+    >({
+      query: ({ leagueId, season }) => ({
+        url: `${inseasonUrl}/league/${leagueId}/trade_willingness`,
+        params: {
           ...(season != null && { season }),
         },
       }),
@@ -286,6 +304,7 @@ export const {
   useGetFreeAgentsQuery,
   useGetLineupQuery,
   useGetStreamingQuery,
+  useGetTradeWillingnessQuery,
   useGetLocksQuery,
   useGetPlayoffSosQuery,
   useGetUsageShiftsQuery,

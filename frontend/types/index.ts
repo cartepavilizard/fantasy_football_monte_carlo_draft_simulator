@@ -628,6 +628,82 @@ export type InSeasonSyncSummary = {
   lock_reminders_created: { kind: string; title: string; id: string }[];
 };
 
+// --- Trade willingness (Phase E, E3): mirrors backend/models/trade_willingness.py
+// willingness_features()'s per-team dict shape. Computed on read, no storage.
+
+export type TradeWillingnessActivity = {
+  n_moves: number;
+  moves_per_season: number;
+  league_mean_moves_per_season: number;
+};
+
+export type TradeWillingnessDealShapes = {
+  n: number;
+  one_for_one?: number;
+  two_for_one?: number;
+  bigger?: number;
+  avg_players_sent?: number;
+  avg_players_received?: number;
+};
+
+export type TradeWillingnessPositionMix = {
+  n_players_sent: number;
+  shares: Record<string, number>;
+};
+
+export type TradeWillingnessTiming = {
+  n: number;
+  buckets: Record<string, number>;
+};
+
+export type TradeWillingnessPartners = {
+  n_distinct: number;
+  concentration?: number;
+};
+
+export type TradeWillingnessInitiations = {
+  n: number;
+  rate?: number;
+  inferred: boolean;
+};
+
+// "unknown" until the league's trade deadline passes with zero trades
+// (the September-credibility rule) — only then does 0 trades count as
+// "reluctant" evidence rather than "hasn't been asked the question yet".
+export type TradeWillingnessLabel = "active" | "open" | "unknown" | "reluctant";
+
+export type TradeWillingness = {
+  n_trades: number;
+  n_seasons_observed: number;
+  trades_per_season: number;
+  league_mean_trades_per_season: number;
+  relative_trade_rate: number | null;
+  activity: TradeWillingnessActivity;
+  deal_shapes: TradeWillingnessDealShapes;
+  position_mix: TradeWillingnessPositionMix;
+  timing: TradeWillingnessTiming;
+  partners: TradeWillingnessPartners;
+  initiations: TradeWillingnessInitiations;
+  veto_context: { n_vetoed_league: number };
+  willingness: TradeWillingnessLabel;
+};
+
+export type TradeWillingnessOwner = {
+  team_id: number;
+  team_name: string;
+  owner_name: string | null;
+  profile_key: string;
+  trade_willingness: TradeWillingness;
+};
+
+// GET /inseason/league/{id}/trade_willingness's data — sorted
+// most-willing first (active > open > unknown > reluctant, then
+// trades_per_season)
+export type TradeWillingnessData = {
+  week: number | null;
+  owners: TradeWillingnessOwner[];
+};
+
 // --- Notifications (Phase B, B5): mirrors backend/models/notifications.py
 // Notification and the panel CRUD in backend/notifications_api.py.
 // `read` is panel state (user saw it in-app); `pushed_at` is the

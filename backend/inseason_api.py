@@ -42,6 +42,7 @@ from models.lineup import optimize_lineup
 from models.matchup_strength import defense_position_strength
 from models.playoff_sos import playoff_schedule_strength, playoff_sos_for_league
 from models.streaming import streaming_recommendations
+from models.trade_willingness import league_trade_willingness
 from models.usage_shifts import detect_usage_shifts
 from models.inseason import (
     FreeAgentSnapshot,
@@ -425,6 +426,20 @@ async def get_usage_shifts(week: int, season: int = DRAFT_YEAR):
         "week": week,
         "shifts": await detect_usage_shifts(engine, season, week),
     }
+
+
+@router.get("/league/{espn_league_id}/trade_willingness")
+async def get_trade_willingness(espn_league_id: int, season: int = DRAFT_YEAR):
+    """
+    E3: per-owner trade-willingness profiles for one league, sorted
+    most-willing first. Computed on read from synced LeagueTransaction
+    rows only — no storage, no writes to OwnerProfile. Mongo-only,
+    inherits B4's cached-only constraint.
+    """
+    engine = _engine()
+    await _league_or_404(engine, espn_league_id, season)
+    data = await league_trade_willingness(engine, espn_league_id, season)
+    return await _envelope(engine, espn_league_id, season, data)
 
 
 @router.get("/league/{espn_league_id}/locks")

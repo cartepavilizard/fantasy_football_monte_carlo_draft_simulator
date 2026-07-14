@@ -178,6 +178,7 @@ def test_cached_only_modules_never_import_data_sources():
     import notifications_api
     from models import inseason as inseason_models
     from models import notifications as notification_models
+    from models import counterproposals as counterproposals_models
     from models import trade_valuation as trade_valuation_models
 
     for module in (
@@ -186,6 +187,7 @@ def test_cached_only_modules_never_import_data_sources():
         inseason_models,
         notification_models,
         trade_valuation_models,  # E1: joins the cached-only club
+        counterproposals_models,  # E2: pure search over E1's context
     ):
         tree = ast.parse(inspect.getsource(module))
         for node in ast.walk(tree):
@@ -242,6 +244,12 @@ def test_every_inseason_get_serves_with_the_network_rigged_to_explode(
         json={"team_a": 1, "team_b": 2, "sends_a": [100], "sends_b": [200]},
     )
     assert evaluate.status_code == 200, evaluate.text
+    # the counter generator (E2) is a POST too, and just as cached-only
+    counters = client.post(
+        f"/inseason/league/{LEAGUE_ID}/trade/counters",
+        json={"team_a": 1, "team_b": 2, "sends_a": [100], "sends_b": [200]},
+    )
+    assert counters.status_code == 200, counters.text
 
 
 # --- reads ----------------------------------------------------------------------

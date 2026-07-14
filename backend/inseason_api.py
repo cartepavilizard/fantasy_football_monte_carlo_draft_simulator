@@ -32,6 +32,7 @@ from odmantic import query
 from pydantic import BaseModel
 
 from models.config import DRAFT_YEAR
+from models.counterproposals import generate_counters
 from models.handcuffs import (
     available_handcuff_flags,
     delete_handcuff,
@@ -336,6 +337,37 @@ async def post_trade_evaluate(espn_league_id: int, proposal: TradeProposal):
     if errors:
         raise HTTPException(status_code=422, detail=errors[0])
     data = evaluate_trade(
+        ctx,
+        proposal.team_a,
+        proposal.team_b,
+        proposal.sends_a,
+        proposal.sends_b,
+        overrides=proposal.availability_overrides,
+    )
+    return await _envelope(engine, espn_league_id, season, data)
+
+
+@router.post("/league/{espn_league_id}/trade/counters")
+async def post_trade_counters(espn_league_id: int, proposal: TradeProposal):
+    """
+    Given a proposed trade (E2), search single-move tweaks — ADD/REMOVE/SWAP
+    one player, anchored on the deal's reason-to-exist — for 1-3 fair
+    counterproposals. Same body as trade/evaluate; internally build_context
+    -> evaluate_trade -> generate_counters, all pure Mongo reads, so it
+    inherits B4's cached-only constraint despite being a POST (the body is a
+    proposal, not a fetch trigger). Computes but never sends or persists a
+    counter — E7 handles messaging, the human handles sending.
+    """
+    engine = _engine()
+    season = proposal.season or DRAFT_YEAR
+    league = await _league_or_404(engine, espn_league_id, season)
+    ctx = await build_context(engine, league, week=proposal.week)
+    errors = validate_trade(
+        ctx, proposal.team_a, proposal.team_b, proposal.sends_a, proposal.sends_b
+    )
+    if errors:
+        raise HTTPException(status_code=422, detail=errors[0])
+    data = generate_counters(
         ctx,
         proposal.team_a,
         proposal.team_b,

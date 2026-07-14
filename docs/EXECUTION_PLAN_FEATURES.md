@@ -174,12 +174,18 @@ the August 2026 human review of the handcuff seed table, setting
 
 ## Phase D — Injury & News (Sep)
 
+> **Design pass (2026-07-11, Fable):** every frontier-grade decision in
+> Phases D/E/F is now spec'd in [`docs/specs/`](./specs/). Implementation
+> routing below is post-Fable: **[Opus 4.8]** for the intricate builds,
+> **[Sonnet]** for everything with a settled interface. Recommended
+> session order at the bottom of this document.
+
 | # | Task | Routing | Notes |
 | --- | --- | --- | --- |
-| D1 | **Beat writer directory**: team→writer mapping (Seahawks → Brady Henderson, etc.), editable, seeded for all 32 teams. | [CHEAP] | Static reference table + CRUD + small UI. |
-| D2 | **Official practice participation ingestion**: full/limited/DNP from official NFL injury reports as an early signal ahead of ESPN designation updates; attach to player records; feed C4-style alerts on downgrades. | [SPLIT] | Frontier picks the source and parsing strategy (official report formats change); cheaper model writes the recurring transform once the strategy is set. |
-| D3 | **Manual Grok bridge**: generate a targeted prompt (e.g., "What has [beat writer from D1] said about [player] in the last 48 hours?") for the user to run in their free xAI account; paste-back box ingests the response and attaches it to the player as a sourced note. **No automated or paid API calls — by design.** | [SPLIT] | Frontier designs the paste-back parsing (free-text → structured note, with skepticism about stale/hallucinated info); cheaper model builds the prompt templates and UI. |
-| D4 | **Kickoff reminders (live)**: turn on the B5 Routines for the real season — pre-first-lock (Wednesday opener aware, from B1's lock times) and pre-final-lock pushes, including "you have an injured/BYE player starting" checks. | [CHEAP] | Configuration of B5's backbone, not new machinery. |
+| D1 | **Beat writer directory**: team→writer mapping (Seahawks → Brady Henderson, etc.), editable, seeded for all 32 teams. | [Sonnet] | Static reference table + CRUD + small UI. Follow C7's handcuff-table patterns (seed + manual edits + soft behavior on re-seed). D3's prompt templates join on it. |
+| D2 | **Official practice participation ingestion**: full/limited/DNP from official NFL injury reports as an early signal ahead of ESPN designation updates; attach to player records; feed C4-style alerts on downgrades. | [SPLIT] → **[Sonnet]** | **Frontier half done — source + parsing strategy spec'd (2026-07-11, Fable design pass): [`docs/specs/D2-practice-report-ingestion.md`](./specs/D2-practice-report-ingestion.md).** Source: nflverse `injuries` CSV (same family/pattern as C4); mapping-table parser with an unmapped-value tripwire for mid-season format drift; daily-trail upserts for PracticeReport, replace-per-week for InjuryDesignation; downgrade-only alerts for rostered players. Sonnet writes the transform verbatim. |
+| D3 | **Manual Grok bridge**: generate a targeted prompt (e.g., "What has [beat writer from D1] said about [player] in the last 48 hours?") for the user to run in their free xAI account; paste-back box ingests the response and attaches it to the player as a sourced note. **No automated or paid API calls — by design.** | [SPLIT] → **[Sonnet]** | **Frontier half done — parsing design spec'd (2026-07-11, Fable design pass): [`docs/specs/D3-grok-bridge-parsing.md`](./specs/D3-grok-bridge-parsing.md).** Key move: the generated prompt instructs Grok to emit a fenced key-value footer, so the parser is deterministic block extraction (no LLM in the backend). Skepticism = stale-by-default + official-signal conflicts + hard quarantine (no automated consumer may read PlayerNote; import-graph test). Sonnet builds templates, parser, endpoints, UI verbatim. |
+| D4 | **Kickoff reminders (live)**: turn on the B5 Routines for the real season — pre-first-lock (Wednesday opener aware, from B1's lock times) and pre-final-lock pushes, including "you have an injured/BYE player starting" checks. | [Sonnet] | Configuration of B5's backbone, not new machinery. Do at season start alongside enabling `INSEASON_SYNC_ENABLED` / `USAGE_INGEST_ENABLED` / `LINEUP_PULL_ENABLED`. |
 
 ---
 
@@ -187,14 +193,14 @@ the August 2026 human review of the handcuff seed table, setting
 
 | # | Task | Routing | Notes |
 | --- | --- | --- | --- |
-| E1 | **Trade grading**: score both sides of a proposed trade from projections/rankings (rest-of-season value, positional need, playoff SOS from C5, IR-stash value); show the value gap in plain terms. | [FRONTIER] | The valuation model is the heart of the whole trade phase; E2–E7 all consume it. |
-| E2 | **Counterproposal generator**: given a lopsided trade, search both rosters' surplus/need for tweaks that close E1's gap; propose 1–3 fair counters. | [FRONTIER] | Search over roster-combination space with fairness constraints. |
-| E3 | **Trade-willingness owner profiles**: extend the existing owner-tendency profiling (`profiling.py`) with historical trade behavior — who trades, how often, what shapes of deals. | [SPLIT] | Frontier defines the willingness features; cheaper model does the ESPN transaction-history transform (B1 provides the data). |
-| E4 | **Proactive opportunity scanner**: cross-reference league-wide injury news (D2/C4 signals) against all rosters (B4's cache) to flag trade windows — e.g., rival's starter goes down, you hold surplus there. | [FRONTIER] | Cross-cutting correlation of injuries × rosters × needs; high false-positive cost (it interrupts you via push). |
-| E5 | **Blocking plays**: flag handcuffs (C7's map) of *rivals'* injured stars worth grabbing purely to deny them. | [CHEAP] | Join of C7's handcuff map with D2's injury signals over rivals' rosters. |
-| E6 | **Free agent hoarding**: after waivers process each week, flag speculative adds/drops worth making before Sunday to keep players off the board. | [SPLIT] | Frontier defines "worth hoarding" (drop cost vs. denial value); cheaper model schedules and renders the weekly report. |
-| E7 | **Trade messaging generator**: friendly, non-salesy message framing a proposal/counter with actual projection and matchup numbers from E1. | [CHEAP] | Templating over E1's output. |
-| E8 | **Trade deadline awareness**: per-league deadline tracking; buy/sell window flags in the weeks before it (contender vs. rebuilder lens per team record). | [CHEAP] | Date math + record check feeding B5 notifications. |
+| E1 | **Trade grading**: score both sides of a proposed trade from projections/rankings (rest-of-season value, positional need, playoff SOS from C5, IR-stash value); show the value gap in plain terms. | [FRONTIER] → **[Opus 4.8]** | **Done (2026-07-11) — spec: [`docs/specs/E1-trade-valuation.md`](./specs/E1-trade-valuation.md).** `backend/models/trade_valuation.py` implements the two value units verbatim: `player_value` (ROS points above replacement, floored, with a reported-but-never-reweighted `playoff_value` component) and `fit_delta` (roster-context starting-lineup change via C1's `best_assignment` DP + a `BENCH_FACTOR` depth term, never floored). `ValuationContext`/`build_context` are the only async surface (one Mongo read + every rate once); everything below is synchronous and pure so E2 can reuse one context — no awaits in the evaluation path. Availability curve is the IR-stash value (brainstorm §2.6). Reuses `matchup_strength`/`lineup` unchanged. New config in `models/config.py` (`TRADE_HORIZON_FINAL_WEEK` … `FAIR_GAP_FRACTION`, all env-tunable). Endpoints `POST /inseason/league/{id}/trade/evaluate` (proposal body, still pure Mongo reads) and `GET /inseason/league/{id}/player_values`; both added to both cached-only enforcement tests. Tests: `backend/tests/test_trade_valuation.py` (spec §6 edge cases + every Appendix A worked example as assertions, ±0.1). **Two fixture reconciliations, no unit change:** (1) §3.1 writes the rate window as "weeks `<=` w0" but the normative fixtures require strictly `< w0` with w0's own projection as fallback 1 — A.1 gives the *identical* trailing set (11.8/13.0/12.1/12.7 → 12.4) for healthy vs. questionable-at-w0 X, which is only possible if w0 is excluded from the mean, and A.5 explicitly labels the week-1/current projection "fallback 1"; implemented as `< w0`. (2) A.1's parenthetical "healthy X = 29.6 without tilts" is inconsistent with §7's own `12.4 × 8 = 99.2` gross, which yields neutral value **29.0**; tests assert 29.0. E1 lands before any other E task. |
+| E2 | **Counterproposal generator**: given a lopsided trade, search both rosters' surplus/need for tweaks that close E1's gap; propose 1–3 fair counters. | [FRONTIER] → **[Opus 4.8]** | **Spec'd (2026-07-11, Fable design pass): [`docs/specs/E2-counterproposal-generator.md`](./specs/E2-counterproposal-generator.md).** Single-move anchored search (ADD/REMOVE/SWAP) with a four-stage pruning funnel over E1's pure evaluation functions; deterministic output. Requires E1 landed first. |
+| E3 | **Trade-willingness owner profiles**: extend the existing owner-tendency profiling (`profiling.py`) with historical trade behavior — who trades, how often, what shapes of deals. | [SPLIT] → **[Sonnet]** | **Frontier half done — features spec'd (2026-07-11, Fable design pass): [`docs/specs/E3-trade-willingness-features.md`](./specs/E3-trade-willingness-features.md).** Computed-on-read (no storage), profiling.py ground rules (n-counts, recency weights, inferred labels), `unknown`-until-deadline rule for zero-trade owners. Sonnet implements the transform + endpoint + UI verbatim. |
+| E4 | **Proactive opportunity scanner**: cross-reference league-wide injury news (D2/C4 signals) against all rosters (B4's cache) to flag trade windows — e.g., rival's starter goes down, you hold surplus there. | [FRONTIER] → **[Opus 4.8]** | **Spec'd (2026-07-11, Fable design pass): [`docs/specs/E4-opportunity-scanner.md`](./specs/E4-opportunity-scanner.md).** Five AND-ed trigger conditions (questionable never pushes), push budget of 2/league-week, everything else degrades to an on-demand report endpoint; scan state seeds silently on first pass. Requires E1; reads D2 opportionally. |
+| E5 | **Blocking plays**: flag handcuffs (C7's map) of *rivals'* injured stars worth grabbing purely to deny them. | [Sonnet] | Join of C7's handcuff map with D2's injury signals over rivals' rosters. Boundary with E6 is defined in [`docs/specs/E6-hoarding-definition.md`](./specs/E6-hoarding-definition.md) §1 (E5 owns injured-star handcuffs; E6 excludes them). Needs D2 landed. |
+| E6 | **Free agent hoarding**: after waivers process each week, flag speculative adds/drops worth making before Sunday to keep players off the board. | [SPLIT] → **[Sonnet]** | **Frontier half done — "worth hoarding" spec'd (2026-07-11, Fable design pass): [`docs/specs/E6-hoarding-definition.md`](./specs/E6-hoarding-definition.md).** `max(my_gain, 0.5 × best_rival_gain) − drop_cost > 3.0` in E1 units; bounded candidate pool; stored weekly report + one digest notification; E5's injured-star-handcuff cases excluded. Sonnet implements against the spec after E1 lands. |
+| E7 | **Trade messaging generator**: friendly, non-salesy message framing a proposal/counter with actual projection and matchup numbers from E1. | [Sonnet] | Templating over E1's `evaluate_trade` output (quote per-week numbers per E1 spec §4.3's copy rules; E3's willingness informs tone only, never quoted). Needs E1 landed. |
+| E8 | **Trade deadline awareness**: per-league deadline tracking; buy/sell window flags in the weeks before it (contender vs. rebuilder lens per team record). | [Sonnet] | Date math (`InSeasonLeague.trade_deadline`) + record check (`LeagueTeamInfo` wins/losses) feeding B5 notifications; quotes E1's `playoff_value` component for the buy/sell lens when E1 is available. No E1 hard dependency. |
 
 ---
 
@@ -204,9 +210,9 @@ Contextual flags, **not hard rules** — surfaced inline where relevant.
 
 | # | Task | Routing | Notes |
 | --- | --- | --- | --- |
-| F1 | **Stacking awareness**: flag QB + pass-catcher correlation opportunities in draft suggestions and trade evaluations. | [SPLIT] | Frontier sets the correlation weighting; cheaper model adds the flags at existing call sites. |
-| F2 | **Bye week planning**: warn on bye clustering at draft time; preview thin weeks in-season. | [CHEAP] | Schedule joins over data B1 already has. |
-| F3 | **Anti-correlation awareness**: flag rostering players who compete for the same touches (same-backfield RBs outside the C7 handcuff case). | [CHEAP] | Reuses C7's depth relationships with an inverted lens. |
+| F1 | **Stacking awareness**: flag QB + pass-catcher correlation opportunities in draft suggestions and trade evaluations. | [SPLIT] → **[Sonnet]** | **Frontier half done — correlation weights spec'd (2026-07-11, Fable design pass): [`docs/specs/F1-stacking-correlation.md`](./specs/F1-stacking-correlation.md).** Fixed ρ table (QB+WR 0.40, QB+TE 0.35, mild rows for honesty), σ ≈ 0.45 × weekly projection, flag quotes "extra weekly swing" points; two call sites (draft `suggested` map, E1 trade report decoration); provably zero effect on any ranking or verdict. Sonnet adds the flags verbatim (trade call site after E1 lands). |
+| F2 | **Bye week planning**: warn on bye clustering at draft time; preview thin weeks in-season. | [Sonnet] | Schedule joins over data B1 already has. |
+| F3 | **Anti-correlation awareness**: flag rostering players who compete for the same touches (same-backfield RBs outside the C7 handcuff case). | [Sonnet] | Reuses C7's depth relationships with an inverted lens. Same flag-only discipline as F1 (see that spec's must-nots — zero effect on rankings/verdicts). |
 
 ---
 
@@ -231,3 +237,37 @@ Contextual flags, **not hard rules** — surfaced inline where relevant.
    leave precise specs behind in the code and this doc.
 2. Cheaper-model sessions execute the [CHEAP] backlog against those specs.
 3. A short frontier review pass at each phase's exit criteria before moving on.
+
+## Phase D/E/F Implementation Session Order (post-design-pass, 2026-07-11)
+
+Every remaining decision is spec'd in [`docs/specs/`](./specs/); this is
+the order the implementing sessions should run, honoring dependencies
+and the calendar (Phase D live in Sep; E fully live by early Oct):
+
+1. **E1** [Opus 4.8] — [`E1-trade-valuation.md`](./specs/E1-trade-valuation.md).
+   The long pole; six tasks consume its units. Start first.
+2. **D2** [Sonnet] — [`D2-practice-report-ingestion.md`](./specs/D2-practice-report-ingestion.md).
+   No dependencies; September-critical. Can run in parallel with E1.
+3. **D1 + D3** [Sonnet, one session] — directory, then
+   [`D3-grok-bridge-parsing.md`](./specs/D3-grok-bridge-parsing.md) on top of it.
+4. **E3** [Sonnet] — [`E3-trade-willingness-features.md`](./specs/E3-trade-willingness-features.md).
+   Independent of E1 (reads only LeagueTransaction); lands the
+   willingness labels E4's report annotates with.
+5. **E2** [Opus 4.8] — [`E2-counterproposal-generator.md`](./specs/E2-counterproposal-generator.md).
+   Needs E1's pure evaluation path.
+6. **E4** [Opus 4.8] — [`E4-opportunity-scanner.md`](./specs/E4-opportunity-scanner.md).
+   Needs E1; reads D2 and E3 opportunistically (both in by now).
+7. **E6 + E5** [Sonnet, one session] — [`E6-hoarding-definition.md`](./specs/E6-hoarding-definition.md)
+   plus the E5 join, so the E5/E6 exclusion boundary is built and
+   tested together. Needs E1 + D2.
+8. **E7 + E8** [Sonnet, one session] — messaging templates over E1's
+   output; deadline flags.
+9. **F1 + F2 + F3** [Sonnet, one session] —
+   [`F1-stacking-correlation.md`](./specs/F1-stacking-correlation.md)
+   (both call sites — E1 exists by now), byes, anti-correlation.
+10. **D4** [Sonnet, short] — season-start configuration: live Routines
+    + enabling the scheduler env flags, alongside B5's outstanding live
+    push test and the C7 handcuff-table human review (Aug).
+
+A short Opus review pass at Phase E exit (after step 8) is worth its
+cost: it's the phase where spec drift would compound.

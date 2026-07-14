@@ -25,10 +25,11 @@ an explicit POST in app.py instead.
 Engine binding: app.py calls configure() with a late-bound getter so
 tests that swap app.engine (conftest) are honored automatically.
 """
-from typing import Callable, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
 from odmantic import query
+from pydantic import BaseModel
 
 from models.config import DRAFT_YEAR
 from models.handcuffs import (
@@ -42,6 +43,12 @@ from models.lineup import optimize_lineup
 from models.matchup_strength import defense_position_strength
 from models.playoff_sos import playoff_schedule_strength, playoff_sos_for_league
 from models.streaming import streaming_recommendations
+from models.trade_valuation import (
+    build_context,
+    evaluate_trade,
+    player_value,
+    validate_trade,
+)
 from models.usage_shifts import detect_usage_shifts
 from models.inseason import (
     FreeAgentSnapshot,
@@ -288,6 +295,102 @@ async def get_streaming(
     week = week or league.latest_scoring_period
     data = await streaming_recommendations(engine, espn_league_id, season, week)
     return await _envelope(engine, espn_league_id, season, data)
+
+
+# --- trade valuation (E1): market value + roster fit, Mongo-only ------------
+
+
+class TradeProposal(BaseModel):
+    """POST body for trade evaluation. POST because it carries a proposal,
+    NOT because it fetches — the handler is pure Mongo reads and is covered
+    by the rigged-transport enforcement test."""
+
+    team_a: int
+    team_b: int
+    sends_a: List[int] = []
+    sends_b: List[int] = []
+    season: Optional[int] = None
+    week: Optional[int] = None
+    availability_overrides: Optional[Dict[int, Dict[int, float]]] = None
+
+
+@router.post("/league/{espn_league_id}/trade/evaluate")
+async def post_trade_evaluate(espn_league_id: int, proposal: TradeProposal):
+    """
+    Grade a trade proposal (E1) on both value lenses: player_value (market
+    fairness) and fit_delta (does it help each roster). Serves entirely
+    from Mongo — inherits B4's cached-only constraint despite being a POST;
+    the body is a proposal, not a fetch trigger.
+
+    Live-week note: a mid-week trade slightly overcounts the live week for
+    both sides symmetrically — values use full-week expected points and do
+    not discount an already-locked Thursday player.
+    """
+    engine = _engine()
+    season = proposal.season or DRAFT_YEAR
+    league = await _league_or_404(engine, espn_league_id, season)
+    ctx = await build_context(engine, league, week=proposal.week)
+    errors = validate_trade(
+        ctx, proposal.team_a, proposal.team_b, proposal.sends_a, proposal.sends_b
+    )
+    if errors:
+        raise HTTPException(status_code=422, detail=errors[0])
+    data = evaluate_trade(
+        ctx,
+        proposal.team_a,
+        proposal.team_b,
+        proposal.sends_a,
+        proposal.sends_b,
+        overrides=proposal.availability_overrides,
+    )
+    return await _envelope(engine, espn_league_id, season, data)
+
+
+@router.get("/league/{espn_league_id}/player_values")
+async def get_player_values(
+    espn_league_id: int,
+    espn_team_id: Optional[int] = None,
+    position: Optional[str] = None,
+    limit: int = 25,
+    week: Optional[int] = None,
+    season: int = DRAFT_YEAR,
+):
+    """
+    player_value (E1) for one team's roster, and — when a position is
+    given — the top `limit` free agents at that position too. The UI's
+    value browser and a cheap sanity surface for tuning; Mongo-only,
+    inherits B4's cached-only constraint.
+    """
+    engine = _engine()
+    league = await _league_or_404(engine, espn_league_id, season)
+    if espn_team_id is None and position is None:
+        raise HTTPException(
+            status_code=422,
+            detail="provide espn_team_id and/or position to value players",
+        )
+    ctx = await build_context(engine, league, week=week)
+    values = []
+    if espn_team_id is not None:
+        values.extend(
+            player_value(ctx, pid) for pid in ctx.rosters.get(espn_team_id, [])
+        )
+    if position is not None:
+        wanted = position.upper()
+        free_agents = [
+            player_value(ctx, pid)
+            for pid, meta in ctx.players.items()
+            if meta.get("espn_team_id") is None
+            and (meta.get("position") or "").upper() == wanted
+        ]
+        free_agents.sort(key=lambda entry: entry["value"], reverse=True)
+        values.extend(free_agents[:limit])
+    values.sort(key=lambda entry: entry["value"], reverse=True)
+    return await _envelope(
+        engine,
+        espn_league_id,
+        season,
+        {"week": ctx.w0, "weeks_remaining": len(ctx.horizon), "values": values},
+    )
 
 
 @router.get("/matchup_strength")

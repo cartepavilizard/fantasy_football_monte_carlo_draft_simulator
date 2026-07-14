@@ -184,6 +184,42 @@ PLAYOFF_SOS_WEEKS = [
     if week
 ]
 
+# Trade valuation (Phase E, task E1). The keystone of Phase E: player_value
+# (context-free market value, ROS points above replacement) and fit_delta
+# (roster-context starting-lineup change) are both in league-scoring ROS
+# points, computed over the horizon [latest_scoring_period .. min(
+# TRADE_HORIZON_FINAL_WEEK, final_scoring_period or 17)]. Every constant
+# here is env-tunable with its rationale in docs/specs/E1-trade-valuation.md
+# — no ML, no calibration, no re-projection.
+#   TRADE_HORIZON_FINAL_WEEK: value stops at the fantasy championship
+#     (week 17 is worthless), defaults to the last playoff-SOS week.
+#   TRADE_RATE_WEEKS: trailing ESPN weekly projections averaged into the
+#     neutral healthy rate; RATE_MIN_POINTS floors out absence-encoding
+#     near-zeros so an injured star is not averaged down to nothing.
+#   REPLACEMENT_RANK: the 3rd-best free agent at a position is the zero
+#     line (the top FA is often stale/gone; 3rd is reliably attainable).
+#   QUESTIONABLE/DOUBTFUL_PLAY_PROB, IR_RETURN_WEEKS, IR_RETURN_DISCOUNT:
+#     the availability curve (this IS the IR-stash value).
+#   BENCH_FACTOR: bench depth converts to starts via injuries/byes at ~the
+#     league's weekly starter-miss rate; without it every consolidation
+#     grades free, at full weight hoarding grades free.
+#   FAIR_GAP_POINTS / FAIR_GAP_FRACTION: a trade is "fair" when the market
+#     gap is within max(absolute, fraction * larger side) — small trades
+#     don't fail on trivial absolute gaps, big ones don't on relative ones.
+TRADE_HORIZON_FINAL_WEEK = int(
+    os.getenv("TRADE_HORIZON_FINAL_WEEK", max(PLAYOFF_SOS_WEEKS))
+)
+TRADE_RATE_WEEKS = int(os.getenv("TRADE_RATE_WEEKS", 4))
+RATE_MIN_POINTS = float(os.getenv("RATE_MIN_POINTS", 0.5))
+REPLACEMENT_RANK = int(os.getenv("REPLACEMENT_RANK", 3))
+QUESTIONABLE_PLAY_PROB = float(os.getenv("QUESTIONABLE_PLAY_PROB", 0.75))
+DOUBTFUL_PLAY_PROB = float(os.getenv("DOUBTFUL_PLAY_PROB", 0.25))
+IR_RETURN_WEEKS = int(os.getenv("IR_RETURN_WEEKS", 3))
+IR_RETURN_DISCOUNT = float(os.getenv("IR_RETURN_DISCOUNT", 0.8))
+BENCH_FACTOR = float(os.getenv("BENCH_FACTOR", 0.15))
+FAIR_GAP_POINTS = float(os.getenv("FAIR_GAP_POINTS", 10.0))
+FAIR_GAP_FRACTION = float(os.getenv("FAIR_GAP_FRACTION", 0.15))
+
 # Usage ingestion (Phase C, task C4's cheap half): the nflverse CSV pull
 # that fills PlayerWeekUsage. Off by default like every scheduled fetch;
 # InSeasonScheduler.run_now only ingests + raises usage-shift alerts

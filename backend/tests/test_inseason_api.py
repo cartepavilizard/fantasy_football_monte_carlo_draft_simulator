@@ -232,6 +232,9 @@ def test_every_inseason_get_serves_with_the_network_rigged_to_explode(
         "/inseason/practice_reports?week=5",
         "/inseason/handcuffs",
         f"/inseason/league/{LEAGUE_ID}/handcuffs",
+        "/inseason/writers",
+        "/inseason/grok_prompt?player=Jaxon+Smith-Njigba&kind=beat_check",
+        "/inseason/player_notes",
         "/notifications",
         "/notifications/pending",
     ]:

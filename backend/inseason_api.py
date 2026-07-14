@@ -28,8 +28,15 @@ tests that swap app.engine (conftest) are honored automatically.
 from typing import Callable, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
-from odmantic import query
+from odmantic import ObjectId, query
+from pydantic import BaseModel
 
+from models.beat_writers import (
+    delete_beat_writer,
+    list_beat_writers,
+    seed_beat_writers,
+    upsert_beat_writer,
+)
 from models.config import DRAFT_YEAR
 from models.handcuffs import (
     available_handcuff_flags,
@@ -40,6 +47,16 @@ from models.handcuffs import (
 )
 from models.lineup import optimize_lineup
 from models.matchup_strength import defense_position_strength
+from models.player_notes import (
+    PROMPT_KINDS,
+    PlayerNote,
+    UnknownPlayerError,
+    build_grok_prompt,
+    delete_player_note,
+    list_player_notes,
+    preview_player_note,
+    save_player_note,
+)
 from models.playoff_sos import playoff_schedule_strength, playoff_sos_for_league
 from models.streaming import streaming_recommendations
 from models.usage_shifts import detect_usage_shifts
@@ -504,3 +521,153 @@ async def get_locks(
             },
         }
     return await _envelope(engine, espn_league_id, season, data)
+
+
+# --- beat-writer directory (D1): curated, Mongo-only, no external calls ------
+
+
+@router.get("/writers")
+async def get_writers():
+    """The team -> beat-writer directory (D1), sorted by team"""
+    writers = await list_beat_writers(_engine())
+    return {"writers": [writer.model_dump(exclude={"id"}) for writer in writers]}
+
+
+@router.post("/writers")
+async def set_writer(
+    nfl_team: str,
+    writer_name: str,
+    outlet: str,
+    note: Optional[str] = None,
+):
+    """Create or repoint one team's writer (marked manual; survives re-seeds)"""
+    writer = await upsert_beat_writer(
+        _engine(), nfl_team, writer_name, outlet, note=note
+    )
+    return writer.model_dump(exclude={"id"})
+
+
+@router.post("/writers/seed")
+async def seed_writer_table():
+    """Insert missing seed rows; never touches existing/manual rows"""
+    return await seed_beat_writers(_engine())
+
+
+@router.delete("/writers/{nfl_team}")
+async def remove_writer(nfl_team: str):
+    """Delete one team's writer mapping (e.g. an outlet reshuffle with no clear successor)"""
+    if not await delete_beat_writer(_engine(), nfl_team):
+        raise HTTPException(
+            status_code=404, detail=f"No beat writer mapping for {nfl_team}"
+        )
+    return {"deleted": nfl_team.upper()}
+
+
+# --- Grok bridge (D3): manual paste-back parsing, no LLM/xAI calls anywhere --
+
+
+class GrokNoteParseRequest(BaseModel):
+    raw_text: str
+    player_name: Optional[str] = None
+    season: Optional[int] = None
+    week: Optional[int] = None
+
+
+class GrokNoteSaveRequest(BaseModel):
+    player_name: str
+    kind: str
+    prompt_text: str
+    raw_text: str
+    season: int = DRAFT_YEAR
+    week: int
+    summary: Optional[str] = None
+    status_signal: Optional[str] = None
+
+
+def _dump_player_note(note: PlayerNote) -> dict:
+    """Unlike every other model in this router, the id is included —
+    DELETE /inseason/player_note/{id} needs it, and notes have no other
+    natural key (same reasoning as notifications_api.py's _dump)."""
+    data = note.model_dump(exclude={"id"})
+    data["id"] = str(note.id)
+    return data
+
+
+@router.get("/grok_prompt")
+async def get_grok_prompt(
+    player: str,
+    kind: str,
+    season: int = DRAFT_YEAR,
+    injury: Optional[str] = None,
+    context: Optional[str] = None,
+):
+    """
+    Assembles one of D3's three prompt templates (beat_check joins D1's
+    writer directory by the player's nfl_team). Pure string assembly
+    from cached data — no fetch, no LLM call. 404 on an unknown player;
+    degrades to team-level phrasing on an unknown writer.
+    """
+    if kind not in PROMPT_KINDS:
+        raise HTTPException(status_code=400, detail=f"Unknown prompt kind: {kind}")
+    engine = _engine()
+    try:
+        return await build_grok_prompt(
+            engine, player, kind, season, injury=injury, context=context
+        )
+    except UnknownPlayerError:
+        raise HTTPException(status_code=404, detail=f"Unknown player: {player}")
+
+
+@router.post("/player_note/parse")
+async def parse_player_note(request: GrokNoteParseRequest):
+    """Parse preview + computed stale_risk/conflicts, without saving (D3's confirm screen)"""
+    engine = _engine()
+    return await preview_player_note(
+        engine,
+        request.raw_text,
+        player_name=request.player_name,
+        season=request.season,
+        week=request.week,
+    )
+
+
+@router.post("/player_note")
+async def create_player_note(request: GrokNoteSaveRequest):
+    """Re-runs parse + skepticism server-side (never trusts the preview round-trip) and saves"""
+    if not request.raw_text.strip():
+        raise HTTPException(status_code=422, detail="raw_text is empty")
+    engine = _engine()
+    note = await save_player_note(
+        engine,
+        season=request.season,
+        week=request.week,
+        player_name=request.player_name,
+        kind=request.kind,
+        prompt_text=request.prompt_text,
+        raw_text=request.raw_text,
+        summary=request.summary,
+        status_signal=request.status_signal,
+    )
+    return _dump_player_note(note)
+
+
+@router.get("/player_notes")
+async def get_player_notes(
+    player: Optional[str] = None,
+    week: Optional[int] = None,
+    season: Optional[int] = None,
+):
+    """Every saved note, newest first (D3); no dedupe, research accumulates"""
+    notes = await list_player_notes(_engine(), player_name=player, week=week, season=season)
+    return {"notes": [_dump_player_note(note) for note in notes]}
+
+
+@router.delete("/player_note/{note_id}")
+async def remove_player_note(note_id: ObjectId):
+    """Notes are user data; full delete, no soft-delete ceremony (D3)"""
+    engine = _engine()
+    note = await engine.find_one(PlayerNote, PlayerNote.id == note_id)
+    if note is None:
+        raise HTTPException(status_code=404, detail="No such player note")
+    await delete_player_note(engine, note)
+    return {"deleted": True}

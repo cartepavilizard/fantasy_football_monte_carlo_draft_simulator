@@ -204,6 +204,12 @@ PRACTICE_INGEST_ENABLED = (
 )
 UNMAPPED_TRIPWIRE = float(os.getenv("UNMAPPED_TRIPWIRE", 0.2))
 
+# Grok bridge (Phase D, task D3): a note's undated-or-old-sources
+# skepticism cutoff. The instructed prompt footer always demands dated
+# sources, so a note without a NEWEST_SOURCE inside this many hours of
+# now is treated as stale — see models/player_notes.py.
+GROK_STALE_HOURS = float(os.getenv("GROK_STALE_HOURS", 72))
+
 # Ranking aggregation settings (Phase 1)
 SCORING_FORMAT = os.getenv("SCORING_FORMAT", "ppr")  # standard | half_ppr | ppr
 try:

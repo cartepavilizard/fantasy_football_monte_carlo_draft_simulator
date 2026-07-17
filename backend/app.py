@@ -21,8 +21,12 @@ from data_sources import service as ranking_service
 from data_sources.base import SourceFetchError
 from data_sources.espn_history import ingest_league_history
 from data_sources.espn_league import sync_all_leagues
+import flags_api
+import hoarding_api
 import inseason_api
 import notifications_api
+import opportunity_api
+import trade_comms_api
 import backtest as backtest_module
 import profiling
 from scheduler import InSeasonScheduler, LineupPullScheduler, RankingsScheduler
@@ -148,8 +152,16 @@ lineup_pull_scheduler = LineupPullScheduler(lambda: engine)
 # tests that monkeypatch app.engine are honored by the routers too.
 inseason_api.configure(lambda: engine)
 notifications_api.configure(lambda: engine)
+opportunity_api.configure(lambda: engine)
+hoarding_api.configure(lambda: engine)
+trade_comms_api.configure(lambda: engine)
+flags_api.configure(lambda: engine)
 app.include_router(inseason_api.router)
 app.include_router(notifications_api.router)
+app.include_router(opportunity_api.router)
+app.include_router(hoarding_api.router)
+app.include_router(trade_comms_api.router)
+app.include_router(flags_api.router)
 
 
 @app.on_event("startup")

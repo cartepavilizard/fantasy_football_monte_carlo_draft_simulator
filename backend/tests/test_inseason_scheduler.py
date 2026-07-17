@@ -70,12 +70,26 @@ def run_scheduler_for(scheduler, seconds):
     asyncio.run(go())
 
 
+class SeasonScanRecorder:
+    """Stands in for the E4/E6/E8 (engine, season) scan entry points"""
+
+    def __init__(self):
+        self.calls = []
+
+    async def __call__(self, engine, season):
+        self.calls.append(season)
+        return {}
+
+
 def make_scheduler(**kwargs):
     sync_fn = kwargs.pop("sync_fn", None) or SyncRecorder()
     reminder_fn = kwargs.pop("reminder_fn", None) or ReminderRecorder()
     usage_ingest_fn = kwargs.pop("usage_ingest_fn", None) or UsageRecorder()
     usage_notify_fn = kwargs.pop("usage_notify_fn", None) or UsageRecorder()
     practice_ingest_fn = kwargs.pop("practice_ingest_fn", None) or PracticeRecorder()
+    kwargs.setdefault("opportunity_scan_fn", SeasonScanRecorder())
+    kwargs.setdefault("hoarding_scan_fn", SeasonScanRecorder())
+    kwargs.setdefault("deadline_check_fn", SeasonScanRecorder())
     kwargs.setdefault("enabled", True)
     kwargs.setdefault("interval_hours", 0.03 / 3600)
     # both cadences tiny by default so lifecycle tests tick regardless of

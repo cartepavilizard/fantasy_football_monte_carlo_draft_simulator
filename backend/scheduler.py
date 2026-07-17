@@ -155,6 +155,9 @@ class InSeasonScheduler:
         usage_ingest_fn=None,
         usage_notify_fn=None,
         practice_ingest_fn=None,
+        opportunity_scan_fn=None,
+        hoarding_scan_fn=None,
+        deadline_check_fn=None,
         enabled: Optional[bool] = None,
         usage_ingest_enabled: Optional[bool] = None,
         practice_ingest_enabled: Optional[bool] = None,
@@ -182,6 +185,24 @@ class InSeasonScheduler:
             from data_sources.nflverse_injuries import ingest_practice_reports
 
             practice_ingest_fn = ingest_practice_reports
+        # Phase E scans (E4/E6/E8): pure Mongo computations over freshly
+        # synced data — notification budgets/dedupe live inside each scan,
+        # so a pass re-running them is always safe
+        if opportunity_scan_fn is None:
+            from models.opportunity_scanner import run_opportunity_scan
+
+            opportunity_scan_fn = run_opportunity_scan
+        if hoarding_scan_fn is None:
+            from models.hoarding import run_hoarding_scan
+
+            hoarding_scan_fn = run_hoarding_scan
+        if deadline_check_fn is None:
+            from models.deadline_awareness import run_deadline_check
+
+            deadline_check_fn = run_deadline_check
+        self._opportunity_scan_fn = opportunity_scan_fn
+        self._hoarding_scan_fn = hoarding_scan_fn
+        self._deadline_check_fn = deadline_check_fn
         self._engine_getter = engine_getter  # late-bound: tests swap engines
         self._sync_fn = sync_fn
         self._reminder_fn = reminder_fn
@@ -278,6 +299,11 @@ class InSeasonScheduler:
             if self.practice_ingest_enabled:
                 for week in sorted(live_weeks):
                     await self._practice_ingest_fn(engine, DRAFT_YEAR, week)
+            # Phase E scans ride every pass: each dedupes/budgets its own
+            # notifications, so they are idempotent within a league-week
+            await self._opportunity_scan_fn(engine, DRAFT_YEAR)
+            await self._hoarding_scan_fn(engine, DRAFT_YEAR)
+            await self._deadline_check_fn(engine, DRAFT_YEAR)
             self.last_summary = summary
             self.last_error = None
         except Exception as exc:

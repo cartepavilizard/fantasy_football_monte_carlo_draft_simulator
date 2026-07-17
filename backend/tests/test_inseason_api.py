@@ -177,11 +177,22 @@ def test_cached_only_modules_never_import_data_sources():
     cannot even name the code that talks to the outside world"""
     import ast
 
+    import flags_api
+    import hoarding_api
     import inseason_api
     import notifications_api
+    import opportunity_api
+    import trade_comms_api
     from models import inseason as inseason_models
     from models import notifications as notification_models
+    from models import blocking as blocking_models
+    from models import bye_planning as bye_planning_models
+    from models import correlation_flags as correlation_flags_models
     from models import counterproposals as counterproposals_models
+    from models import deadline_awareness as deadline_awareness_models
+    from models import hoarding as hoarding_models
+    from models import opportunity_scanner as opportunity_scanner_models
+    from models import trade_messaging as trade_messaging_models
     from models import trade_valuation as trade_valuation_models
     from models import trade_willingness as trade_willingness_model
 
@@ -193,6 +204,17 @@ def test_cached_only_modules_never_import_data_sources():
         trade_valuation_models,  # E1: joins the cached-only club
         trade_willingness_model,
         counterproposals_models,  # E2: pure search over E1's context
+        opportunity_api,  # E4-F3: the four Phase E/F routers and their
+        hoarding_api,  # models all inherit B4's cached-only constraint
+        trade_comms_api,
+        flags_api,
+        opportunity_scanner_models,
+        hoarding_models,
+        blocking_models,
+        trade_messaging_models,
+        deadline_awareness_models,
+        correlation_flags_models,
+        bye_planning_models,
     ):
         tree = ast.parse(inspect.getsource(module))
         for node in ast.walk(tree):

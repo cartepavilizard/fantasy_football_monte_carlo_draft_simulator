@@ -4,11 +4,15 @@ import { baseQuery } from "@/api/services/base";
 import {
   BeatWriter,
   BeatWriterSeedResult,
+  BlockingData,
+  ByeOutlookData,
+  DeadlineReport,
   GrokParsePreview,
   GrokPrompt,
   HandcuffFlagsData,
   HandcuffPair,
   HandcuffSeedResult,
+  HoardingReportData,
   InSeasonEnvelope,
   InSeasonOverview,
   InSeasonSyncSummary,
@@ -19,8 +23,14 @@ import {
   LeagueTransaction,
   PlayerNote,
   PlayoffSosData,
+  StrategyFlagsData,
   StreamingData,
   TeamWeekRoster,
+  TradeCountersResult,
+  TradeEvaluation,
+  TradeMessageData,
+  TradeOpportunityReport,
+  TradeProposalBody,
   TradeWillingnessData,
   UsageShiftsData,
 } from "@/types";
@@ -430,6 +440,198 @@ export const inseasonApi = createApi({
       invalidatesTags: ["PlayerNotes"],
     }),
 
+    // --- Phase E/F trade surfaces ------------------------------------------
+    // All Mongo-only (cached-only club). The POSTs carry a proposal body,
+    // NOT a fetch trigger — the handler is pure Mongo reads, so they inherit
+    // B4's constraint the same way handcuff CRUD does. The Trade Room page
+    // drives evaluate/counters/message on demand from its proposal builder.
+
+    // E1: grade a proposal on both value lenses (market fairness + roster
+    // fit). On-demand POST — the Trade Room fires it from the Evaluate
+    // button, like parsePlayerNote fires from Preview parse.
+    evaluateTrade: builder.mutation<
+      InSeasonEnvelope<TradeEvaluation>,
+      { leagueId: number } & TradeProposalBody
+    >({
+      query: ({ leagueId, ...body }) => ({
+        url: `${inseasonUrl}/league/${leagueId}/trade/evaluate`,
+        method: "POST",
+        body,
+      }),
+    }),
+
+    // E2: 1-3 single-move counterproposals that close the gap into E1's fair
+    // band without wrecking either roster's fit. Same body as evaluate.
+    countersTrade: builder.mutation<
+      InSeasonEnvelope<TradeCountersResult>,
+      { leagueId: number } & TradeProposalBody
+    >({
+      query: ({ leagueId, ...body }) => ({
+        url: `${inseasonUrl}/league/${leagueId}/trade/counters`,
+        method: "POST",
+        body,
+      }),
+    }),
+
+    // E7: render the friendly, non-salesy message for a proposal. A GET —
+    // accepts the proposal as comma-separated id query params, mirroring how
+    // player_values is a GET. Lazy because the Trade Room only renders it on
+    // demand (the Message button), never on mount.
+    getTradeMessage: builder.query<
+      InSeasonEnvelope<TradeMessageData>,
+      {
+        leagueId: number;
+        teamA: number;
+        teamB: number;
+        sendsA: number[];
+        sendsB: number[];
+        week?: number;
+        season?: number;
+        willingness?: string;
+      }
+    >({
+      query: ({
+        leagueId,
+        teamA,
+        teamB,
+        sendsA,
+        sendsB,
+        week,
+        season,
+        willingness,
+      }) => ({
+        url: `${inseasonUrl}/league/${leagueId}/trade/message`,
+        params: {
+          team_a: teamA,
+          team_b: teamB,
+          sends_a: sendsA.join(","),
+          sends_b: sendsB.join(","),
+          ...(week != null && { week }),
+          ...(season != null && { season }),
+          ...(willingness && { willingness }),
+        },
+      }),
+    }),
+
+    // E4: the on-demand opportunity report — every current injury window the
+    // scanner sees, at window or watch severity, with the rival's weekly gap,
+    // your surplus pieces, and the E1 probe where one ran. Pure re-evaluation
+    // of synced state — refreshing never consumes push budget.
+    getTradeOpportunities: builder.query<
+      InSeasonEnvelope<TradeOpportunityReport>,
+      { leagueId: number; season?: number }
+    >({
+      query: ({ leagueId, season }) => ({
+        url: `${inseasonUrl}/league/${leagueId}/trade_opportunities`,
+        params: { ...(season != null && { season }) },
+      }),
+      providesTags: (result, error, { leagueId }) => [
+        { type: "InSeasonLeague", id: leagueId },
+      ],
+    }),
+
+    // E6: the STORED weekly post-waivers hoarding report. data is null when
+    // no report has been generated yet (the scan runs via the scheduler, not
+    // on the read path) — the panel renders an empty state, never crashes.
+    getHoarding: builder.query<
+      InSeasonEnvelope<HoardingReportData | null>,
+      { leagueId: number; week?: number; season?: number }
+    >({
+      query: ({ leagueId, week, season }) => ({
+        url: `${inseasonUrl}/league/${leagueId}/hoarding`,
+        params: {
+          ...(week != null && { week }),
+          ...(season != null && { season }),
+        },
+      }),
+      providesTags: (result, error, { leagueId }) => [
+        { type: "InSeasonLeague", id: leagueId },
+      ],
+    }),
+
+    // E5: blocking plays computed on demand — rivals' injured-star handcuffs
+    // worth grabbing purely to deny. The join is cheap (bounded rivals'
+    // rosters), so unlike E6 it computes on the read path.
+    getBlocking: builder.query<
+      InSeasonEnvelope<BlockingData>,
+      { leagueId: number; week?: number; season?: number }
+    >({
+      query: ({ leagueId, week, season }) => ({
+        url: `${inseasonUrl}/league/${leagueId}/blocking`,
+        params: {
+          ...(week != null && { week }),
+          ...(season != null && { season }),
+        },
+      }),
+      providesTags: (result, error, { leagueId }) => [
+        { type: "InSeasonLeague", id: leagueId },
+      ],
+    }),
+
+    // E8: per-league trade-deadline report — buy/sell window flags per team
+    // from trade_deadline + wins/losses, with E1's playoff_value attached
+    // where buildable. A league with no trade_deadline returns in_window
+    // false and no team flags.
+    getDeadlineReport: builder.query<
+      InSeasonEnvelope<DeadlineReport>,
+      { leagueId: number; season?: number }
+    >({
+      query: ({ leagueId, season }) => ({
+        url: `${inseasonUrl}/league/${leagueId}/deadline_report`,
+        params: { ...(season != null && { season }) },
+      }),
+      providesTags: (result, error, { leagueId }) => [
+        { type: "InSeasonLeague", id: leagueId },
+      ],
+    }),
+
+    // F1 + F3: stacking + anti-correlation flags for one roster (or every
+    // roster when espn_team_id is omitted). Display-only — flags, never
+    // rules; removing them changes no ranking, valuation, or verdict.
+    getStrategyFlags: builder.query<
+      InSeasonEnvelope<StrategyFlagsData>,
+      { leagueId: number; teamId?: number; week?: number; season?: number }
+    >({
+      query: ({ leagueId, teamId, week, season }) => ({
+        url: `${inseasonUrl}/league/${leagueId}/strategy_flags`,
+        params: {
+          ...(teamId != null && { espn_team_id: teamId }),
+          ...(week != null && { week }),
+          ...(season != null && { season }),
+        },
+      }),
+      providesTags: (result, error, { leagueId }) => [
+        { type: "InSeasonLeague", id: leagueId },
+      ],
+    }),
+
+    // F2: bye planning — the league-wide cluster warning PLUS the per-roster
+    // in-season thin-week preview. Degrades to status="no_schedule_data"
+    // when no ProGame rows exist; the panel shows that note, not a crash.
+    getByeOutlook: builder.query<
+      InSeasonEnvelope<ByeOutlookData>,
+      {
+        leagueId: number;
+        teamId?: number;
+        week?: number;
+        season?: number;
+        threshold?: number;
+      }
+    >({
+      query: ({ leagueId, teamId, week, season, threshold }) => ({
+        url: `${inseasonUrl}/league/${leagueId}/bye_outlook`,
+        params: {
+          ...(teamId != null && { espn_team_id: teamId }),
+          ...(week != null && { week }),
+          ...(season != null && { season }),
+          ...(threshold != null && { threshold }),
+        },
+      }),
+      providesTags: (result, error, { leagueId }) => [
+        { type: "InSeasonLeague", id: leagueId },
+      ],
+    }),
+
     // The ONLY route in this file that touches ESPN — always an explicit
     // user action ("Sync now"), never triggered by switching league/team.
     syncLeague: builder.mutation<
@@ -476,5 +678,15 @@ export const {
   useCreatePlayerNoteMutation,
   useGetPlayerNotesQuery,
   useDeletePlayerNoteMutation,
+  useEvaluateTradeMutation,
+  useCountersTradeMutation,
+  useGetTradeMessageQuery,
+  useLazyGetTradeMessageQuery,
+  useGetTradeOpportunitiesQuery,
+  useGetHoardingQuery,
+  useGetBlockingQuery,
+  useGetDeadlineReportQuery,
+  useGetStrategyFlagsQuery,
+  useGetByeOutlookQuery,
   useSyncLeagueMutation,
 } = inseasonApi;

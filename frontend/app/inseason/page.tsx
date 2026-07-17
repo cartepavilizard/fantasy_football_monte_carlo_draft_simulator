@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@nextui-org/button";
 import { Spinner } from "@nextui-org/spinner";
+import NextLink from "next/link";
 import {
   FiAlertTriangle,
   FiCheckCircle,
@@ -21,8 +22,12 @@ import {
   useDeleteHandcuffMutation,
   useDeletePlayerNoteMutation,
   useDeleteWriterMutation,
+  useGetBlockingQuery,
+  useGetByeOutlookQuery,
+  useGetDeadlineReportQuery,
   useGetFreeAgentsQuery,
   useGetHandcuffsQuery,
+  useGetHoardingQuery,
   useGetLeagueHandcuffsQuery,
   useGetLineupQuery,
   useGetLocksQuery,
@@ -32,6 +37,8 @@ import {
   useGetPlayoffSosQuery,
   useGetRosterQuery,
   useGetStreamingQuery,
+  useGetStrategyFlagsQuery,
+  useGetTradeOpportunitiesQuery,
   useGetTradeWillingnessQuery,
   useGetTransactionsQuery,
   useGetUsageShiftsQuery,
@@ -47,12 +54,15 @@ import {
 import { title, subtitle } from "@/components/primitives";
 import { VarianceFlag } from "@/components/variance-flag";
 import {
+  DeadlineReport,
   GrokParsePreview,
   HandcuffFlag,
   HomerCheck,
   InSeasonOverviewEntry,
   MatchupEntry,
   PlayoffSosEntry,
+  StrategyFlagsData,
+  TradeOpportunityReport,
   TradeWillingnessLabel,
   TradeWillingnessOwner,
   UsageShift,
@@ -410,12 +420,154 @@ function LockAdviceCard({
           costs {costPoints.toFixed(1)} pts
         </span>
       </p>
-      <p className="text-xs text-default-500">{note}</p>
-    </div>
-  );
-}
+       <p className="text-xs text-default-500">{note}</p>
+     </div>
+   );
+ }
 
-export default function InSeasonPage() {
+// E4: one trade-opportunity row. severity "window" is the hard five-condition
+// trigger; "watch" is the release valve — marginal cases that didn't clear
+// the push bar. The probe is E1's 1-for-1 evaluation (fit_delta > 0 means the
+// deal grades fit-positive for your roster); null when no probe ran.
+function OpportunityRow({ opp }: { opp: TradeOpportunityReport["opportunities"][number] }) {
+   const isWindow = opp.severity === "window";
+
+   return (
+     <li className="flex flex-col gap-1 border-b border-default-100 pb-2 text-sm">
+       <div className="flex flex-wrap items-center gap-2">
+         <span
+           className={`inline-flex text-xs font-bold px-1.5 py-0.5 rounded-full border ${
+             isWindow
+               ? "bg-success-100 text-success-700 border-success-300 dark:bg-success-950/40 dark:text-success-400"
+               : "bg-default-100 text-default-600 border-default-300 dark:bg-default-800/40"
+           }`}
+         >
+           {opp.severity}
+         </span>
+         <span className="font-bold">{opp.rival_team_name}</span>
+         <span className="text-default-400">
+           {opp.injured.name} ({opp.injured.position ?? "—"}, {opp.injured.status}) —
+           ~{opp.rival_gap_per_week.toFixed(1)} pts/wk gap
+         </span>
+       </div>
+       {opp.my_surplus.length > 0 ? (
+         <p className="text-default-500">
+           Your spare:{" "}
+           {opp.my_surplus
+             .map((s) => `${s.name} (${s.value.toFixed(1)} ROS)`)
+             .join(", ")}
+         </p>
+       ) : (
+         <p className="text-default-400">No spare piece above the offer floor.</p>
+       )}
+       {opp.probe && (
+         <p className="text-default-500">
+           Probe fit: you{" "}
+           <span
+             className={`font-bold ${
+               opp.probe.fit_delta_a >= 0 ? "text-success" : "text-danger"
+             }`}
+           >
+             {opp.probe.fit_delta_a > 0 ? "+" : ""}
+             {opp.probe.fit_delta_a.toFixed(1)} ROS
+           </span>
+           , them {opp.probe.fit_delta_b > 0 ? "+" : ""}
+           {opp.probe.fit_delta_b.toFixed(1)}.
+         </p>
+       )}
+       {opp.note && <p className="text-xs text-default-400">{opp.note}</p>}
+     </li>
+   );
+ }
+
+// E8: one deadline-window team row, with a role badge (contender/rebuilder)
+// and a buy/sell window flag. Neutral teams show no window — the model only
+// calls when there's a clear strategic reason to act before the deadline.
+function roleBadgeClass(role: DeadlineReport["teams"][number]["role"]): string {
+   switch (role) {
+     case "contender":
+       return "bg-success-100 text-success-700 border-success-300 dark:bg-success-950/40 dark:text-success-400";
+     case "rebuilder":
+       return "bg-danger-100 text-danger-700 border-danger-300 dark:bg-danger-950/40 dark:text-danger-400";
+     default:
+       return "bg-default-100 text-default-600 border-default-300 dark:bg-default-800/40";
+   }
+ }
+
+function DeadlineTeamRow({ team }: { team: DeadlineReport["teams"][number] }) {
+   return (
+     <tr className="border-t border-default-100 align-top">
+       <td className="py-1">
+         {team.name}
+         <span className="text-default-400">
+           {" "}
+           ({team.wins}-{team.losses}
+           {team.ties ? `-${team.ties}` : ""})
+         </span>
+       </td>
+       <td className="py-1">
+         <span
+           className={`inline-flex text-xs font-bold px-1.5 py-0.5 rounded-full border ${roleBadgeClass(
+             team.role,
+           )}`}
+         >
+           {team.role}
+         </span>
+       </td>
+       <td className="py-1">
+         {team.window ? (
+           <span className="font-bold capitalize">{team.window}</span>
+         ) : (
+           <span className="text-default-400">—</span>
+         )}
+       </td>
+       <td className="py-1 text-right">
+         {team.playoff_value != null
+           ? team.playoff_value.toFixed(1)
+           : "—"}
+       </td>
+     </tr>
+   );
+ }
+
+// F1: one stack flag (best same-NFL-team QB/pass-catcher pairing). grade
+// "strong" is rho>=0.30. Informational styling — never alarming.
+function StackFlagRow({ flag }: { flag: StrategyFlagsData["rosters"][number]["stacks"][number] }) {
+   return (
+     <li className="text-sm border-b border-default-100 pb-1">
+       <span className="font-bold">{flag.positions.join(" + ")}</span>{" "}
+       stack with {flag.with}
+       {flag.also_with && flag.also_with.length > 0 && (
+         <span className="text-default-400"> (also: {flag.also_with.join(", ")})</span>
+       )}
+       <span className="text-default-400">
+         {" "}
+         — ρ={flag.correlation.toFixed(2)}, +{flag.extra_swing.toFixed(2)} swing
+         ({flag.grade})
+       </span>
+       <p className="text-xs text-default-400">{flag.note}</p>
+     </li>
+   );
+ }
+
+// F3: one anti-correlation flag (same-backfield RBs competing for touches,
+// excluding C7's deliberate handcuff pairs). Committee competition, not a
+// value call.
+function AntiCorrelationRow({
+   flag,
+ }: {
+   flag: StrategyFlagsData["rosters"][number]["anti_correlation"][number];
+ }) {
+   return (
+     <li className="text-sm border-b border-default-100 pb-1">
+       <span className="font-bold">{flag.players.join(" & ")}</span>{" "}
+       <span className="text-default-400">({flag.nfl_team} backfield)</span>
+       <p className="text-xs text-default-400">{flag.note}</p>
+     </li>
+   );
+ }
+
+ export default function InSeasonPage() {
   const { data: overview, isLoading: overviewLoading } = useGetOverviewQuery();
 
   const [leagueId, setLeagueId] = useState<number | null>(null);
@@ -482,6 +634,35 @@ export default function InSeasonPage() {
   );
   const tradeWillingnessQuery = useGetTradeWillingnessQuery(
     { leagueId: leagueId ?? 0 },
+    { skip: leagueId === null },
+  );
+
+  // E4/F trade + strategy surfaces — all read-only GETs over the standard
+  // cached envelope, each rendered with a StalenessBanner and a graceful
+  // empty state (never a crash when the data isn't there yet).
+  const tradeOpportunitiesQuery = useGetTradeOpportunitiesQuery(
+    { leagueId: leagueId ?? 0 },
+    { skip: leagueId === null },
+  );
+  const hoardingQuery = useGetHoardingQuery(
+    { leagueId: leagueId ?? 0 },
+    { skip: leagueId === null },
+  );
+  const blockingQuery = useGetBlockingQuery(
+    { leagueId: leagueId ?? 0 },
+    { skip: leagueId === null },
+  );
+  const deadlineReportQuery = useGetDeadlineReportQuery(
+    { leagueId: leagueId ?? 0 },
+    { skip: leagueId === null },
+  );
+  // F1/F3 are per-roster when a team is selected, else league-wide.
+  const strategyFlagsQuery = useGetStrategyFlagsQuery(
+    { leagueId: leagueId ?? 0, teamId: teamId ?? undefined },
+    { skip: leagueId === null },
+  );
+  const byeOutlookQuery = useGetByeOutlookQuery(
+    { leagueId: leagueId ?? 0, teamId: teamId ?? undefined },
     { skip: leagueId === null },
   );
 
@@ -828,6 +1009,14 @@ export default function InSeasonPage() {
                 ))}
               </select>
             </label>
+            {leagueId !== null && (
+              <NextLink
+                className="text-sm text-primary underline"
+                href={`/trade-room/${leagueId}`}
+              >
+                Open trade room →
+              </NextLink>
+            )}
           </div>
         )}
         {selectedEntry && (
@@ -1952,6 +2141,397 @@ export default function InSeasonPage() {
                       ))}
                     </tbody>
                   </table>
+                )}
+              </>
+            )}
+          </div>
+
+          {/* Trade opportunities (E4) — the on-demand opportunity report:
+              every current injury window the scanner sees, at window or
+              watch severity, with the rival's weekly gap, your surplus
+              pieces, and the E1 probe where one ran. Pure re-evaluation of
+              synced state — refreshing never consumes push budget. */}
+          <div className={cardClass}>
+            <h3 className="text-xl">Trade opportunities</h3>
+            <p className="text-sm text-default-500">
+              Every rival injury window the scanner sees right now. A
+              &quot;window&quot; row cleared all five conditions; a
+              &quot;watch&quot; row is the release valve — real, but below
+              the push bar.
+            </p>
+            {tradeOpportunitiesQuery.isLoading || !tradeOpportunitiesQuery.data ? (
+              <Spinner />
+            ) : (
+              <>
+                <StalenessBanner warnings={tradeOpportunitiesQuery.data.warnings} />
+                {tradeOpportunitiesQuery.data.data.error ? (
+                  <p className="text-sm text-default-500">
+                    {tradeOpportunitiesQuery.data.data.error}
+                  </p>
+                ) : tradeOpportunitiesQuery.data.data.opportunities.length === 0 ? (
+                  <p className="text-sm text-default-500">
+                    No active injury windows right now. The scanner re-runs
+                    against synced data on every refresh.
+                  </p>
+                ) : (
+                  <ul className="flex flex-col gap-2">
+                    {tradeOpportunitiesQuery.data.data.opportunities.map(
+                      (opp) => (
+                        <OpportunityRow
+                          key={`${opp.rival_team_id}-${opp.injured.player_id}`}
+                          opp={opp}
+                        />
+                      ),
+                    )}
+                  </ul>
+                )}
+              </>
+            )}
+          </div>
+
+          {/* Blocking (E5) + Hoarding (E6) — clearly separated. E5 is the
+              on-demand denial report (rivals' injured-star handcuffs worth
+              grabbing purely to deny); E6 is the STORED weekly post-waivers
+              worth-hoarding scan (null until the scheduler generates one). */}
+          <div className={cardClass}>
+            <h3 className="text-xl">
+              <FiShield className="inline mb-1 mr-1" />
+              Blocking plays
+            </h3>
+            <p className="text-sm text-default-500">
+              Rivals&apos; injured-star handcuffs sitting on waivers — claim
+              purely to deny the rival the insurance. Denial, not points.
+            </p>
+            {blockingQuery.isLoading || !blockingQuery.data ? (
+              <Spinner />
+            ) : (
+              <>
+                <StalenessBanner warnings={blockingQuery.data.warnings} />
+                {blockingQuery.data.data.entries.length === 0 ? (
+                  <p className="text-sm text-default-500">
+                    {blockingQuery.data.data.note ??
+                      "No rival injured-star handcuffs available right now."}
+                  </p>
+                ) : (
+                  <ul className="flex flex-col gap-2">
+                    {blockingQuery.data.data.entries.map((entry) => (
+                      <li
+                        key={entry.handcuff_player_id}
+                        className="text-sm border-b border-default-100 pb-2"
+                      >
+                        <span className="font-bold">{entry.handcuff_name}</span>
+                        <span className="text-default-400">
+                          {" "}
+                          ({entry.position ?? "—"} · {entry.nfl_team ?? "—"})
+                        </span>
+                        <p className="text-default-500">{entry.copy}</p>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </>
+            )}
+          </div>
+
+          <div className={cardClass}>
+            <h3 className="text-xl">Hoarding report</h3>
+            <p className="text-sm text-default-500">
+              The stored weekly post-waivers worth-hoarding scan. Generated by
+              the scheduler (Mon/Tue post-waivers), not on demand — empty
+              until one exists for this week.
+            </p>
+            {hoardingQuery.isLoading || !hoardingQuery.data ? (
+              <Spinner />
+            ) : (
+              <>
+                <StalenessBanner warnings={hoardingQuery.data.warnings} />
+                {!hoardingQuery.data.data ? (
+                  <p className="text-sm text-default-500">
+                    No hoarding report generated for this week yet.
+                  </p>
+                ) : (
+                  <>
+                    <p className="text-xs text-default-400">
+                      Generated{" "}
+                      {new Date(
+                        hoardingQuery.data.data.generated_at,
+                      ).toLocaleString()}
+                      {hoardingQuery.data.data.note && (
+                        <> — {hoardingQuery.data.data.note}</>
+                      )}
+                    </p>
+                    {hoardingQuery.data.data.entries.length === 0 ? (
+                      <p className="text-sm text-default-500">
+                        No hoard targets cleared the margin this week.
+                      </p>
+                    ) : (
+                      <ul className="flex flex-col gap-2">
+                        {hoardingQuery.data.data.entries.map((entry) => (
+                          <li
+                            key={entry.player_id}
+                            className="text-sm border-b border-default-100 pb-2"
+                          >
+                            <span className="font-bold">
+                              {entry.player_name}
+                            </span>
+                            <span className="text-default-400">
+                              {" "}
+                              ({entry.position ?? "—"} · {entry.nfl_team ?? "—"})
+                            </span>
+                            <span className="font-bold">
+                              {" "}
+                              — {entry.hoard_value.toFixed(1)} hoard value
+                            </span>
+                            <span className="text-default-400">
+                              {" "}
+                              ({entry.reason}, margin {entry.margin.toFixed(1)},
+                              drop {entry.drop.player_name}{" "}
+                              {entry.drop.value.toFixed(1)})
+                            </span>
+                            <p className="text-default-500">{entry.copy}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </>
+                )}
+              </>
+            )}
+          </div>
+
+          {/* Deadline report (E8) — buy/sell window flags per team from
+              trade_deadline + wins/losses, with E1's playoff_value attached
+              where buildable. in_window is false outside the configurable
+              pre-deadline window or when the league has no trade_deadline. */}
+          <div className={cardClass}>
+            <h3 className="text-xl">Trade deadline report</h3>
+            <p className="text-sm text-default-500">
+              Per-team buy/sell windows in the weeks before the trade
+              deadline. Contenders buy (chase playoff value); rebuilder sell
+              (move expiring assets). Neutral teams show no window.
+            </p>
+            {deadlineReportQuery.isLoading || !deadlineReportQuery.data ? (
+              <Spinner />
+            ) : (
+              <>
+                <StalenessBanner warnings={deadlineReportQuery.data.warnings} />
+                {!deadlineReportQuery.data.data.in_window ? (
+                  <p className="text-sm text-default-500">
+                    {deadlineReportQuery.data.data.trade_deadline
+                      ? `Outside the pre-deadline window (deadline ${new Date(
+                          deadlineReportQuery.data.data.trade_deadline,
+                        ).toLocaleDateString()}, ${deadlineReportQuery.data.data.weeks_to_deadline}w away).`
+                      : "This league has no configured trade deadline."}
+                  </p>
+                ) : (
+                  <>
+                    <p className="text-sm">
+                      <span className="font-bold">
+                        {deadlineReportQuery.data.data.weeks_to_deadline}
+                      </span>{" "}
+                      weeks to deadline ({new Date(
+                        deadlineReportQuery.data.data.trade_deadline!,
+                      ).toLocaleDateString()}).
+                    </p>
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="text-left text-default-500">
+                          <th className="pb-1">Team</th>
+                          <th className="pb-1">Role</th>
+                          <th className="pb-1">Window</th>
+                          <th className="pb-1 text-right">Playoff value</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {deadlineReportQuery.data.data.teams.map((team) => (
+                          <DeadlineTeamRow
+                            key={team.espn_team_id}
+                            team={team}
+                          />
+                        ))}
+                      </tbody>
+                    </table>
+                  </>
+                )}
+              </>
+            )}
+          </div>
+
+          {/* Strategy flags (F1 stacks + F3 anti-correlation) — display-only.
+              Per-roster when a team is selected, else league-wide. Flags,
+              never rules: removing them changes no ranking, valuation, or
+              verdict. Informational styling by design. */}
+          <div className={cardClass}>
+            <h3 className="text-xl">
+              Strategy flags
+              {strategyFlagsQuery.data
+                ? ` — week ${strategyFlagsQuery.data.data.week}`
+                : ""}
+            </h3>
+            <p className="text-sm text-default-500">
+              Awareness flags only — F1 stacks (same-NFL-team QB/pass-catcher
+              pairings) and F3 anti-correlation (same-backfield RBs competing
+              for touches). Informational, never a value call.
+            </p>
+            {strategyFlagsQuery.isLoading || !strategyFlagsQuery.data ? (
+              <Spinner />
+            ) : (
+              <>
+                <StalenessBanner warnings={strategyFlagsQuery.data.warnings} />
+                {strategyFlagsQuery.data.data.rosters.length === 0 ? (
+                  <p className="text-sm text-default-500">
+                    No cached rosters for this week yet.
+                  </p>
+                ) : (
+                  <ul className="flex flex-col gap-3">
+                    {strategyFlagsQuery.data.data.rosters.map((roster) => (
+                      <li
+                        key={roster.espn_team_id}
+                        className="flex flex-col gap-1 border-t border-default-100 pt-2 text-sm"
+                      >
+                        <h4 className="text-sm font-bold text-default-500">
+                          {teamName(roster.espn_team_id)}
+                        </h4>
+                        {roster.stacks.length === 0 &&
+                        roster.anti_correlation.length === 0 ? (
+                          <p className="text-default-400">
+                            No stack or committee flags on this roster.
+                          </p>
+                        ) : (
+                          <>
+                            {roster.stacks.length > 0 && (
+                              <div>
+                                <p className="text-xs font-bold text-default-500">
+                                  Stacks
+                                </p>
+                                <ul>
+                                  {roster.stacks.map((flag, i) => (
+                                    <StackFlagRow key={i} flag={flag} />
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                            {roster.anti_correlation.length > 0 && (
+                              <div>
+                                <p className="text-xs font-bold text-default-500">
+                                  Anti-correlation
+                                </p>
+                                <ul>
+                                  {roster.anti_correlation.map((flag, i) => (
+                                    <AntiCorrelationRow key={i} flag={flag} />
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </>
+            )}
+          </div>
+
+          {/* Bye outlook (F2) — the league-wide cluster warning plus the
+              per-roster in-season thin-week preview. Degrades to
+              no_schedule_data when no ProGame rows exist. */}
+          <div className={cardClass}>
+            <h3 className="text-xl">
+              Bye outlook
+              {byeOutlookQuery.data
+                ? ` — week ${byeOutlookQuery.data.data.week}`
+                : ""}
+            </h3>
+            <p className="text-sm text-default-500">
+              Bye-week clustering (league-wide) and each roster&apos;s thinnest
+              future week. Awareness flags, not lineup commands.
+            </p>
+            {byeOutlookQuery.isLoading || !byeOutlookQuery.data ? (
+              <Spinner />
+            ) : (
+              <>
+                <StalenessBanner warnings={byeOutlookQuery.data.warnings} />
+                {byeOutlookQuery.data.data.cluster.status ===
+                "no_schedule_data" ? (
+                  <p className="text-sm text-default-500">
+                    {byeOutlookQuery.data.data.cluster.note ??
+                      "No NFL schedule data available — sync the league to load the pro schedule."}
+                  </p>
+                ) : (
+                  <>
+                    {byeOutlookQuery.data.data.cluster.warning ? (
+                      <p className="flex items-start gap-2 text-sm text-warning-700 dark:text-warning-400">
+                        <FiAlertTriangle className="mt-0.5 shrink-0" />
+                        <span>{byeOutlookQuery.data.data.cluster.warning}</span>
+                      </p>
+                    ) : (
+                      <p className="text-sm text-default-500">
+                        {byeOutlookQuery.data.data.cluster.note ??
+                          `No bye week shared by ${byeOutlookQuery.data.data.threshold}+ likely starters.`}
+                      </p>
+                    )}
+                    {byeOutlookQuery.data.data.cluster.clusters.length > 0 && (
+                      <ul className="flex flex-col gap-1 text-sm">
+                        {byeOutlookQuery.data.data.cluster.clusters.map(
+                          (cluster) => (
+                            <li
+                              key={cluster.week}
+                              className="border-b border-default-100 pb-1"
+                            >
+                              Week {cluster.week} — {cluster.count} starter(s):{" "}
+                              {cluster.players
+                                .map(
+                                  (p) =>
+                                    `${p.name ?? "—"} (${p.nfl_team})`,
+                                )
+                                .join(", ")}
+                            </li>
+                          ),
+                        )}
+                      </ul>
+                    )}
+
+                    <h4 className="text-sm font-bold text-default-500 mt-2">
+                      Thin-week preview
+                    </h4>
+                    <ul className="flex flex-col gap-2 text-sm">
+                      {byeOutlookQuery.data.data.thin_weeks.map((tw) => (
+                        <li
+                          key={tw.espn_team_id}
+                          className="border-b border-default-100 pb-1"
+                        >
+                          <span className="font-bold">
+                            {teamName(tw.espn_team_id)}
+                          </span>
+                          {tw.preview.status === "no_schedule_data" ? (
+                            <span className="text-default-400">
+                              {" "}
+                              — no schedule data
+                            </span>
+                          ) : tw.preview.thinnest_week == null ? (
+                            <span className="text-default-400">
+                              {" "}
+                              — {tw.preview.note ?? "No future bye weeks affect this roster."}
+                            </span>
+                          ) : (
+                            <span>
+                              {" "}
+                              — thinnest in week{" "}
+                              {tw.preview.thinnest_week} (
+                              {tw.preview.count} on bye):{" "}
+                              {tw.preview.affected
+                                .map(
+                                  (a) =>
+                                    `${a.name ?? "—"} (${a.nfl_team})`,
+                                )
+                                .join(", ")}
+                            </span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  </>
                 )}
               </>
             )}

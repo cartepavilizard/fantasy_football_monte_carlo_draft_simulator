@@ -771,6 +771,336 @@ export type TradeWillingnessData = {
   owners: TradeWillingnessOwner[];
 };
 
+// --- Trade valuation (Phase E, E1): mirrors backend/models/trade_valuation.py
+// evaluate_trade()'s return dict and player_value()'s per-player dict. The two
+// value units (player_value market value, fit_delta roster context) are
+// deliberately never merged — the UI presents both, the way the summary does.
+
+export type TradeVerdict = "fair" | "favors_a" | "favors_b";
+
+// player_value()'s dict shape — one side's outgoing piece, with both the
+// headline market value and the reported playoff_value component (E1 §4.1).
+export type TradePlayerValue = {
+  player_id: number;
+  name: string;
+  position: string | null;
+  nfl_team: string | null;
+  injury_status: string | null;
+  rate: number;
+  gross: number;
+  value: number;
+  playoff_value: number;
+  per_week: number;
+  stash_note: string | null;
+  warnings: string[];
+};
+
+// One trade proposal body — POST /inseason/league/{id}/trade/evaluate and
+// /trade/counters share it (inseason_api.TradeProposal). availability_overrides
+// is optional manual return-timeline input the UI doesn't generate today but
+// the body accepts; kept here so the service shape matches the backend 1:1.
+export type TradeProposalBody = {
+  team_a: number;
+  team_b: number;
+  sends_a: number[];
+  sends_b: number[];
+  season?: number;
+  week?: number;
+  availability_overrides?: Record<number, Record<number, number>>;
+};
+
+// evaluate_trade()'s return dict. stack_flags is an optional decoration —
+// the backend does not attach it today, but the spec leaves room for an E1
+// consumer to annotate F1 stack context onto an evaluation; the UI renders
+// it defensively if present, never crashes if absent.
+export type TradeEvaluation = {
+  week: number;
+  weeks_remaining: number;
+  teams: {
+    a: { espn_team_id: number; name: string | null };
+    b: { espn_team_id: number; name: string | null };
+  };
+  sends_a: TradePlayerValue[];
+  sends_b: TradePlayerValue[];
+  value_sent_a: number;
+  value_sent_b: number;
+  market_gap: number;
+  fair_bound: number;
+  verdict: TradeVerdict;
+  fit_delta_a: number;
+  fit_delta_b: number;
+  fit_per_week_a: number;
+  fit_per_week_b: number;
+  summary: string;
+  warnings: string[];
+  // E2 annotates the original/counter evaluations with this roster-size note.
+  roster_size_note?: string | null;
+  // Optional F1 stack decoration (not currently produced by the backend).
+  stack_flags?: unknown;
+};
+
+// --- Counterproposals (Phase E, E2): mirrors backend/models/counterproposals.py
+// generate_counters()'s return dict. One single-move tweak of the proposal,
+// with its full re-evaluation and plain-terms rationale.
+
+export type CounterMoveType = "add" | "remove" | "swap";
+
+export type CounterMove = {
+  type: CounterMoveType;
+  team: "a" | "b";
+  player_id: number;
+  player_name: string;
+  // swap only: the outgoing player being replaced
+  player_out_id?: number;
+  player_out_name?: string;
+};
+
+export type TradeCounter = {
+  move: CounterMove;
+  sends_a: number[];
+  sends_b: number[];
+  evaluation: TradeEvaluation;
+  rationale: string;
+};
+
+export type TradeCountersResult = {
+  original: TradeEvaluation;
+  counters: TradeCounter[];
+  note: string | null;
+};
+
+// --- Trade messaging (Phase E, E7): GET /inseason/league/{id}/trade/message
+// renders a friendly, non-salesy message via render_trade_message(), with the
+// underlying E1 evaluation attached for the UI to quote the same numbers.
+export type TradeMessageData = {
+  message: string;
+  evaluation: TradeEvaluation;
+};
+
+// --- Trade opportunity report (Phase E, E4): mirrors
+// backend/models/opportunity_scanner.py _evaluate_opportunity()'s dict shape
+// and trade_opportunity_report()'s top-level report dict.
+
+export type OpportunityInjuredPlayer = {
+  player_id: number;
+  name: string;
+  position: string | null;
+  status: string;
+  rate: number;
+};
+
+export type OpportunitySurplusPiece = {
+  player_id: number;
+  name: string;
+  value: number;
+  weekly_cost_to_me: number;
+};
+
+export type OpportunityMovablePiece = {
+  player_id: number;
+  name: string;
+  value: number;
+  weekly_cost_to_rival: number;
+};
+
+export type TradeOpportunity = {
+  rival_team_id: number;
+  rival_team_name: string;
+  injured: OpportunityInjuredPlayer;
+  rival_gap_per_week: number;
+  detected_at: string | null;
+  severity: "window" | "watch";
+  my_surplus: OpportunitySurplusPiece[];
+  // E1's evaluate_trade dict for the 1-for-1 probe (M sends cheapest surplus,
+  // R sends most movable), or null when no probe ran.
+  probe: TradeEvaluation | null;
+  note?: string;
+};
+
+export type TradeOpportunityReport = {
+  week: number | null;
+  my_team_id: number | null;
+  opportunities: TradeOpportunity[];
+  error?: string;
+};
+
+// --- Hoarding (Phase E, E6): mirrors backend/models/hoarding.py
+// HoardingReport's model_dump(exclude={"id"}) — the STORED weekly report.
+// data is null when no report has been generated for the league-week yet.
+
+export type HoardingDrop = {
+  player_id: number;
+  player_name: string;
+  value: number;
+};
+
+export type HoardingEntry = {
+  player_id: number;
+  player_name: string;
+  position: string | null;
+  nfl_team: string | null;
+  hoard_value: number;
+  reason: "denial" | "upside";
+  my_gain: number;
+  best_rival_gain: number;
+  rival_team_id: number | null;
+  drop: HoardingDrop;
+  margin: number;
+  sources: string[];
+  copy: string;
+};
+
+export type HoardingReportData = {
+  espn_league_id: number;
+  season: number;
+  week: number;
+  generated_at: string;
+  entries: HoardingEntry[];
+  note: string | null;
+};
+
+// --- Blocking (Phase E, E5): mirrors backend/models/blocking.py
+// blocking_plays()'s return dict — computed on demand (unlike E6's stored
+// report). note is null when entries exist, set to a reason string otherwise.
+export type BlockingEntry = {
+  starter_name: string;
+  starter_team_id: number;
+  starter_injury_status: string | null;
+  handcuff_name: string;
+  handcuff_player_id: number;
+  nfl_team: string | null;
+  position: string | null;
+  handcuff_projected_points: number | null;
+  handcuff_percent_owned: number | null;
+  copy: string;
+};
+
+export type BlockingData = {
+  week: number;
+  entries: BlockingEntry[];
+  note: string | null;
+};
+
+// --- Deadline report (Phase E, E8): mirrors backend/models/deadline_awareness.py
+// compute_deadline_windows()'s return dict, optionally E1-enriched with
+// per-team playoff_value. trade_deadline is null when the league has none.
+export type DeadlineTeam = {
+  espn_team_id: number;
+  name: string;
+  wins: number;
+  losses: number;
+  ties: number;
+  win_pct: number;
+  decided_games: number;
+  role: "contender" | "rebuilder" | "neutral";
+  window: "buy" | "sell" | null;
+  playoff_value: number | null;
+};
+
+export type DeadlineReport = {
+  espn_league_id: number;
+  season: number;
+  week: number;
+  trade_deadline: string | null;
+  weeks_to_deadline: number | null;
+  in_window: boolean;
+  teams: DeadlineTeam[];
+};
+
+// --- Strategy flags (Phase F, F1 + F3): mirrors backend/models/correlation_flags.py
+// roster_stack_flags() / anticorrelation_flags() dict shapes, served per
+// roster by flags_api.get_strategy_flags. Display-only — never a value call.
+
+export type StackFlag = {
+  with: string;
+  positions: string[];
+  correlation: number;
+  grade: "strong" | "mild";
+  extra_swing: number;
+  note: string;
+  also_with?: string[];
+};
+
+export type AntiCorrelationFlag = {
+  players: string[];
+  nfl_team: string;
+  note: string;
+};
+
+export type RosterStrategyReport = {
+  espn_team_id: number;
+  week: number;
+  stacks: StackFlag[];
+  anti_correlation: AntiCorrelationFlag[];
+};
+
+export type StrategyFlagsData = {
+  espn_league_id: number;
+  season: number;
+  week: number;
+  rosters: RosterStrategyReport[];
+};
+
+// --- Bye outlook (Phase F, F2): mirrors backend/models/bye_planning.py
+// bye_cluster_warning() and thin_week_preview() dict shapes. cluster covers
+// the league-wide draft-time warning; thin_weeks is per-roster in-season
+// preview. status "no_schedule_data" degrades gracefully (no ProGame rows).
+
+export type ByeClusterPlayer = {
+  name: string | null;
+  nfl_team: string;
+};
+
+export type ByeCluster = {
+  week: number;
+  count: number;
+  players: ByeClusterPlayer[];
+};
+
+export type ByeClusterResult = {
+  status: "ok" | "no_schedule_data";
+  threshold: number;
+  clusters: ByeCluster[];
+  warning: string | null;
+  note?: string;
+};
+
+export type ThinWeekAffected = {
+  name: string | null;
+  nfl_team: string;
+};
+
+export type ThinWeekEntry = {
+  week: number;
+  count: number;
+  affected: ThinWeekAffected[];
+};
+
+export type ThinWeekPreview = {
+  status: "ok" | "no_schedule_data";
+  current_week: number;
+  thinnest_week: number | null;
+  count: number | null;
+  affected: ThinWeekAffected[];
+  weeks: ThinWeekEntry[];
+  note?: string;
+};
+
+export type ThinWeekReport = {
+  espn_team_id: number;
+  week: number;
+  preview: ThinWeekPreview;
+};
+
+export type ByeOutlookData = {
+  espn_league_id: number;
+  season: number;
+  week: number;
+  threshold: number;
+  cluster: ByeClusterResult;
+  thin_weeks: ThinWeekReport[];
+};
+
 // --- Notifications (Phase B, B5): mirrors backend/models/notifications.py
 // Notification and the panel CRUD in backend/notifications_api.py.
 // `read` is panel state (user saw it in-app); `pushed_at` is the

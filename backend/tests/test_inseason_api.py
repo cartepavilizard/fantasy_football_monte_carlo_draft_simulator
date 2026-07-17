@@ -182,6 +182,7 @@ def test_cached_only_modules_never_import_data_sources():
     from models import inseason as inseason_models
     from models import notifications as notification_models
     from models import trade_valuation as trade_valuation_models
+    from models import trade_willingness as trade_willingness_model
 
     for module in (
         inseason_api,
@@ -189,6 +190,7 @@ def test_cached_only_modules_never_import_data_sources():
         inseason_models,
         notification_models,
         trade_valuation_models,  # E1: joins the cached-only club
+        trade_willingness_model,
     ):
         tree = ast.parse(inspect.getsource(module))
         for node in ast.walk(tree):
@@ -224,6 +226,7 @@ def test_every_inseason_get_serves_with_the_network_rigged_to_explode(
         f"/inseason/league/{LEAGUE_ID}/matchups",
         f"/inseason/league/{LEAGUE_ID}/transactions",
         f"/inseason/league/{LEAGUE_ID}/free_agents",
+        f"/inseason/league/{LEAGUE_ID}/trade_willingness",
         f"/inseason/league/{LEAGUE_ID}/locks",
         f"/inseason/league/{LEAGUE_ID}/lineup?espn_team_id=1",
         f"/inseason/league/{LEAGUE_ID}/streaming",

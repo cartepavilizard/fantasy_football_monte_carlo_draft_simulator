@@ -32,6 +32,7 @@ import {
   useGetPlayoffSosQuery,
   useGetRosterQuery,
   useGetStreamingQuery,
+  useGetTradeWillingnessQuery,
   useGetTransactionsQuery,
   useGetUsageShiftsQuery,
   useGetWritersQuery,
@@ -52,6 +53,8 @@ import {
   InSeasonOverviewEntry,
   MatchupEntry,
   PlayoffSosEntry,
+  TradeWillingnessLabel,
+  TradeWillingnessOwner,
   UsageShift,
 } from "@/types";
 
@@ -255,6 +258,73 @@ function confidenceClass(confidence: string): string {
   return "text-default-400";
 }
 
+// E3: the willingness label's badge styling — "unknown" is deliberately
+// neutral (not a lesser "reluctant"), since it means the season hasn't
+// asked the question yet, not that the owner said no.
+function willingnessBadgeClass(label: TradeWillingnessLabel): string {
+  switch (label) {
+    case "active":
+      return "bg-success-100 text-success-700 border-success-300 dark:bg-success-950/40 dark:text-success-400";
+    case "open":
+      return "bg-primary-100 text-primary-700 border-primary-300 dark:bg-primary-950/40 dark:text-primary-400";
+    case "reluctant":
+      return "bg-danger-100 text-danger-700 border-danger-300 dark:bg-danger-950/40 dark:text-danger-400";
+    default:
+      return "bg-default-100 text-default-600 border-default-300 dark:bg-default-800/40";
+  }
+}
+
+// E3: one owner's row in the trade-willingness table. n-counts stay
+// visible next to every rate (profiling.py's ground rule) so a thin
+// sample never reads as a confident verdict.
+function TradeWillingnessRow({ owner }: { owner: TradeWillingnessOwner }) {
+  const tw = owner.trade_willingness;
+
+  return (
+    <tr className="border-t border-default-100 align-top">
+      <td className="py-1">
+        {owner.team_name}
+        {owner.owner_name && (
+          <span className="text-default-400"> ({owner.owner_name})</span>
+        )}
+      </td>
+      <td className="py-1">
+        <span
+          className={`inline-flex text-xs font-bold px-1.5 py-0.5 rounded-full border ${willingnessBadgeClass(tw.willingness)}`}
+        >
+          {tw.willingness}
+        </span>
+      </td>
+      <td className="py-1 text-right">
+        {tw.trades_per_season.toFixed(1)}
+        <span className="text-default-400"> (n={tw.n_trades})</span>
+      </td>
+      <td className="py-1 text-right">
+        {tw.relative_trade_rate != null ? `${tw.relative_trade_rate.toFixed(2)}x` : "—"}
+      </td>
+      <td className="py-1 text-right">
+        {tw.activity.moves_per_season.toFixed(1)}
+        <span className="text-default-400"> (n={tw.activity.n_moves})</span>
+      </td>
+      <td className="py-1 text-right">
+        {tw.partners.n_distinct > 0 ? (
+          <>
+            {tw.partners.n_distinct}
+            {tw.partners.concentration != null && (
+              <span className="text-default-400">
+                {" "}
+                ({(tw.partners.concentration * 100).toFixed(0)}% top)
+              </span>
+            )}
+          </>
+        ) : (
+          "—"
+        )}
+      </td>
+    </tr>
+  );
+}
+
 function formatKickoff(iso: string): string {
   return new Date(iso).toLocaleString(undefined, {
     weekday: "short",
@@ -407,6 +477,10 @@ export default function InSeasonPage() {
     { skip: leagueId === null },
   );
   const streamingQuery = useGetStreamingQuery(
+    { leagueId: leagueId ?? 0 },
+    { skip: leagueId === null },
+  );
+  const tradeWillingnessQuery = useGetTradeWillingnessQuery(
     { leagueId: leagueId ?? 0 },
     { skip: leagueId === null },
   );
@@ -1835,6 +1909,49 @@ export default function InSeasonPage() {
                       </li>
                     ))}
                   </ul>
+                )}
+              </>
+            )}
+          </div>
+
+          {/* Trade willingness (E3) — owner profiles from executed
+              LeagueTransaction history, sorted most-willing first. */}
+          <div className={cardClass}>
+            <h3 className="text-xl">Trade willingness</h3>
+            <p className="text-sm text-default-500">
+              Who trades, how often, and with whom — computed from this
+              league&apos;s synced transaction history.
+              &quot;unknown&quot; means the season hasn&apos;t reached the
+              trade deadline with zero trades yet, not that the owner
+              said no.
+            </p>
+            {tradeWillingnessQuery.isLoading || !tradeWillingnessQuery.data ? (
+              <Spinner />
+            ) : (
+              <>
+                <StalenessBanner warnings={tradeWillingnessQuery.data.warnings} />
+                {tradeWillingnessQuery.data.data.owners.length === 0 ? (
+                  <p className="text-sm text-default-500">
+                    No cached transactions yet.
+                  </p>
+                ) : (
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-default-500">
+                        <th className="pb-1">Owner</th>
+                        <th className="pb-1">Willingness</th>
+                        <th className="pb-1 text-right">Trades/season</th>
+                        <th className="pb-1 text-right">Vs. league</th>
+                        <th className="pb-1 text-right">Moves/season</th>
+                        <th className="pb-1 text-right">Partners</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {tradeWillingnessQuery.data.data.owners.map((owner) => (
+                        <TradeWillingnessRow key={owner.team_id} owner={owner} />
+                      ))}
+                    </tbody>
+                  </table>
                 )}
               </>
             )}

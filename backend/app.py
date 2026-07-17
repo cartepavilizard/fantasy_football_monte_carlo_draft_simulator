@@ -15,7 +15,7 @@ from sklearn.linear_model import LogisticRegression
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.cors import CORSMiddleware
 import time
-from typing import List, Union
+from typing import List, Optional, Union
 
 from data_sources import service as ranking_service
 from data_sources.base import SourceFetchError
@@ -537,11 +537,21 @@ def simulate_draft(league: League, draft_pick_model: RegressorMixin):
 def monte_carlo_draft(
     league: League,
     seconds: float = 30,  # Set to whatever time is best for the draft
+    iterations: Optional[int] = None,
+    seed: Optional[int] = None,
 ) -> MonteCarloSimulationResult:
     """
     Simulate drafts for each position and return the average points scored
     to determine which position is best to draft
+
+    Reproducibility: `seed` seeds this worker process's module-level RNG
+    (shared by every random call in the rollout path), and `iterations`
+    bounds the loop by count instead of wall clock — a seeded run is only
+    deterministic when the stop condition doesn't depend on machine speed,
+    so pass both together.
     """
+    if seed is not None:
+        random.seed(seed)
     simulator_team = [i for i, team in enumerate(league.teams) if team.simulator]
     if not simulator_team:
         raise HTTPException(
@@ -593,8 +603,14 @@ def monte_carlo_draft(
     # Begin the simulation
     start_time = time.time()
     i = 0
-    while time.time() - start_time < seconds:
+    while (
+        i < iterations
+        if iterations is not None
+        else time.time() - start_time < seconds
+    ):
         for position in results.keys():
+            if iterations is not None and i >= iterations:
+                break
             if position not in candidates:
                 continue  # No draftable (non-avoid) players left
             best_player = candidates[position]
@@ -644,6 +660,7 @@ def scarcity_analysis(
     league: League,
     seconds: float = 10,
     max_iterations: int = 250,
+    seed: Optional[int] = None,
 ) -> ScarcityReport:
     """
     Tier-depletion scarcity engine (A1): Monte Carlo availability at the
@@ -656,7 +673,14 @@ def scarcity_analysis(
     question is "what survives if I wait", and in that branch whichever
     player the simulator takes is by definition not the one being
     evaluated, so no removal is the exact counterfactual.
+
+    A non-None `seed` makes the run reproducible: it seeds the worker's
+    module-level RNG and disables the wall-clock early-out (which would
+    otherwise make the iteration count machine-speed-dependent), leaving
+    max_iterations as the only stop condition.
     """
+    if seed is not None:
+        random.seed(seed)
     simulator_team = [i for i, team in enumerate(league.teams) if team.simulator]
     if not simulator_team:
         raise HTTPException(status_code=400, detail="League has no simulator team")
@@ -742,7 +766,7 @@ def scarcity_analysis(
             if tier_names[position] - gone_at_next:
                 any_at_next[position] += 1
         iterations += 1
-        if time.time() - start_time > seconds:
+        if seed is None and time.time() - start_time > seconds:
             break
 
     def probability(counter, name):
@@ -1799,14 +1823,23 @@ async def make_draft_pick(
     response_model=MonteCarloSimulationResult,
     tags=["draft"],
 )
-async def run_monte_carlo_simulation(draft_id: ObjectId):
+async def run_monte_carlo_simulation(
+    draft_id: ObjectId,
+    seconds: float = 30,
+    iterations: Optional[int] = None,
+    seed: Optional[int] = None,
+):
     """
-    Run a Monte Carlo simulation to determine the best position to draft
+    Run a Monte Carlo simulation to determine the best position to draft.
+    Pass `seed` + `iterations` together for a reproducible run.
     """
     draft = await get_a_draft_by_id(draft_id)
     if not draft.league.draft_order:
         raise HTTPException(status_code=400, detail="Draft is complete")
-    return await run_pooled(monte_carlo_draft, draft.league)
+    seconds = max(1.0, min(seconds, 60.0))
+    if iterations is not None:
+        iterations = max(1, min(iterations, 5000))
+    return await run_pooled(monte_carlo_draft, draft.league, seconds, iterations, seed)
 
 
 # Tier-depletion scarcity: reach-vs-wait calls for the simulator's next pick
@@ -1815,16 +1848,26 @@ async def run_monte_carlo_simulation(draft_id: ObjectId):
     response_model=ScarcityReport,
     tags=["draft"],
 )
-async def get_draft_scarcity(draft_id: ObjectId, seconds: float = 10):
+async def get_draft_scarcity(
+    draft_id: ObjectId,
+    seconds: float = 10,
+    max_iterations: int = 250,
+    seed: Optional[int] = None,
+):
     """
     Simulate opponents' picks up to the simulator's next pick and report,
-    per position, tier depletion and whether to reach now or safely wait
+    per position, tier depletion and whether to reach now or safely wait.
+    Pass `seed` (with max_iterations as the sole stop condition) for a
+    reproducible run.
     """
     draft = await get_a_draft_by_id(draft_id)
     if not draft.league.draft_order:
         raise HTTPException(status_code=400, detail="Draft is complete")
     seconds = max(1.0, min(seconds, 30.0))
-    return await run_pooled(scarcity_analysis, draft.league, seconds)
+    max_iterations = max(1, min(max_iterations, 2000))
+    return await run_pooled(
+        scarcity_analysis, draft.league, seconds, max_iterations, seed
+    )
 
 
 # Get the results of a draft by running each team's randomized points 1000x times

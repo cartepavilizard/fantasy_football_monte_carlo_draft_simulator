@@ -220,6 +220,36 @@ BENCH_FACTOR = float(os.getenv("BENCH_FACTOR", 0.15))
 FAIR_GAP_POINTS = float(os.getenv("FAIR_GAP_POINTS", 10.0))
 FAIR_GAP_FRACTION = float(os.getenv("FAIR_GAP_FRACTION", 0.15))
 
+# Counterproposal generator (Phase E, task E2). A single-move, anchored
+# search over E1's pure evaluation functions — given a lopsided proposal,
+# tweak it (ADD/REMOVE/SWAP one player) to close E1's market gap without
+# wrecking either roster. A four-stage pruning funnel keeps the expensive
+# full-fit evaluation to at most MAX_FINALISTS runs. Every constant is
+# env-tunable with its rationale in docs/specs/E2-counterproposal-generator.md.
+#   MAX_SIDE_PLAYERS: each side sends 1..3 after a move — ESPN trades above
+#     3-for-3 essentially never execute, so bigger packages are noise.
+#   GAP_SLACK / GAP_MIN_FRACTION: Stage-1 candidate band — a piece worth far
+#     more than the gap overshoots into unfairness the other way (1+SLACK
+#     ceiling); one worth a fraction of it closes nothing (MIN_FRACTION floor).
+#   SURPLUS_COST_CEILING: an "untouchable" is anyone whose removal drops their
+#     roster's one-week (w0) starting lineup by more than this — never offered
+#     up as a sweetener/swap-in. One week is a deliberate cheap proxy, not the
+#     full horizon, so Stage 1 stays arithmetic.
+#   MAX_FINALISTS: the residual-gap survivors that reach the expensive Stage-3
+#     full fit_delta evaluation (2xH DP runs each) — the whole funnel exists to
+#     cap this number.
+#   FIT_FLOOR: discard a counter that actively hurts a roster (either side's
+#     fit_delta below this); small negatives survive because need asymmetry is
+#     the point of trading.
+#   MAX_COUNTERS: at most this many counters returned, diversified.
+MAX_SIDE_PLAYERS = int(os.getenv("MAX_SIDE_PLAYERS", 3))
+GAP_SLACK = float(os.getenv("GAP_SLACK", 0.5))
+GAP_MIN_FRACTION = float(os.getenv("GAP_MIN_FRACTION", 0.25))
+SURPLUS_COST_CEILING = float(os.getenv("SURPLUS_COST_CEILING", 1.5))
+MAX_FINALISTS = int(os.getenv("MAX_FINALISTS", 12))
+FIT_FLOOR = float(os.getenv("FIT_FLOOR", -2.0))
+MAX_COUNTERS = int(os.getenv("MAX_COUNTERS", 3))
+
 # Usage ingestion (Phase C, task C4's cheap half): the nflverse CSV pull
 # that fills PlayerWeekUsage. Off by default like every scheduled fetch;
 # InSeasonScheduler.run_now only ingests + raises usage-shift alerts

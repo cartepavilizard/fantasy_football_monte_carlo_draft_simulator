@@ -14,7 +14,7 @@ import clsx from "clsx";
 
 import { siteConfig } from "@/config/site";
 import { ThemeSwitch } from "@/components/theme-switch";
-import { GithubIcon, Logo } from "@/components/icons";
+import { Logo } from "@/components/icons";
 import { NotificationsPanel } from "@/components/notifications-panel";
 
 export const Navbar = () => {
@@ -50,18 +50,12 @@ export const Navbar = () => {
       >
         <NavbarItem className="hidden sm:flex gap-2">
           <NotificationsPanel />
-          <Link isExternal aria-label="Github" href={siteConfig.links.github}>
-            <GithubIcon className="text-default-500" />
-          </Link>
           <ThemeSwitch />
         </NavbarItem>
       </NavbarContent>
 
       <NavbarContent className="sm:hidden basis-1 pl-4" justify="end">
         <NotificationsPanel />
-        <Link isExternal aria-label="Github" href={siteConfig.links.github}>
-          <GithubIcon className="text-default-500" />
-        </Link>
         <ThemeSwitch />
         <NavbarMenuToggle />
       </NavbarContent>

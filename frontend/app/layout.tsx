@@ -1,6 +1,5 @@
 import "@/styles/globals.css";
 import { Metadata, Viewport } from "next";
-import { Link } from "@nextui-org/link";
 import clsx from "clsx";
 
 import { Providers } from "./providers";
@@ -71,32 +70,6 @@ export default function RootLayout({
               {children}
             </main>
           </div>
-          <footer
-            className="
-                w-full relative z-2 
-                flex flex-col items-center justify-center px-6 py-3
-              "
-          >
-            <p className="text-default-600 text-current">By Joe Wlos</p>
-            <p className="text-default-600 text-current">
-              Powered by{" "}
-              <Link
-                isExternal
-                className="text-primary"
-                href="https://nextui-docs-v2.vercel.app?utm_source=next-app-template"
-              >
-                NextUI
-              </Link>{" "}
-              and{" "}
-              <Link
-                isExternal
-                className="text-primary"
-                href="https://art049.github.io/odmantic/"
-              >
-                ODMantic
-              </Link>
-            </p>
-          </footer>
         </Providers>
       </body>
     </html>

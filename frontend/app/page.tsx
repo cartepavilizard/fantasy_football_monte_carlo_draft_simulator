@@ -1,13 +1,10 @@
 import { Link } from "@nextui-org/link";
 import { Snippet } from "@nextui-org/snippet";
 import { Code } from "@nextui-org/code";
-import { button as buttonStyles } from "@nextui-org/theme";
 import clsx from "clsx";
 
 import { fontMono } from "@/config/fonts";
-import { siteConfig } from "@/config/site";
 import { title, subtitle } from "@/components/primitives";
-import { GithubIcon } from "@/components/icons";
 
 export default function Home() {
   return (
@@ -21,17 +18,6 @@ export default function Home() {
           Harness the power of (kind of sort of) artificial intelligence to
           draft players for your fantasy football team.
         </h2>
-      </div>
-
-      <div className="flex">
-        <Link
-          isExternal
-          className={buttonStyles({ variant: "bordered", radius: "full" })}
-          href={siteConfig.links.github}
-        >
-          <GithubIcon size={20} />
-          GitHub
-        </Link>
       </div>
 
       <div>

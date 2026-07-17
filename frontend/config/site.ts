@@ -43,8 +43,5 @@ export const siteConfig = {
       href: "/inseason",
     },
   ],
-  links: {
-    github:
-      "https://github.com/joewlos/fantasy_football_monte_carlo_draft_simulator",
-  },
+  links: {},
 };

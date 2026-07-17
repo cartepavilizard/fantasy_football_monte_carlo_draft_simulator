@@ -2,6 +2,10 @@ import { createApi, fetchBaseQuery } from "@reduxjs/toolkit/query/react";
 
 import { baseQuery } from "@/api/services/base";
 import {
+  BeatWriter,
+  BeatWriterSeedResult,
+  GrokParsePreview,
+  GrokPrompt,
   HandcuffFlagsData,
   HandcuffPair,
   HandcuffSeedResult,
@@ -13,6 +17,7 @@ import {
   MatchupsData,
   FreeAgentsData,
   LeagueTransaction,
+  PlayerNote,
   PlayoffSosData,
   StreamingData,
   TeamWeekRoster,
@@ -29,7 +34,13 @@ const inseasonUrl = "/inseason";
 export const inseasonApi = createApi({
   reducerPath: "inseasonApi",
   baseQuery: fetchBaseQuery(baseQuery),
-  tagTypes: ["InSeasonOverview", "InSeasonLeague", "Handcuffs"],
+  tagTypes: [
+    "InSeasonOverview",
+    "InSeasonLeague",
+    "Handcuffs",
+    "BeatWriters",
+    "PlayerNotes",
+  ],
   endpoints: (builder) => ({
     getOverview: builder.query<InSeasonOverview, { season?: number } | void>({
       query: (args) => ({
@@ -259,6 +270,148 @@ export const inseasonApi = createApi({
       invalidatesTags: ["Handcuffs", "InSeasonLeague"],
     }),
 
+    // D1: the curated team -> beat-writer directory, unscoped by league —
+    // what the writers panel's CRUD reads and writes, and what D3's
+    // beat_check prompt template joins by nfl_team.
+    getWriters: builder.query<{ writers: BeatWriter[] }, void>({
+      query: () => ({ url: `${inseasonUrl}/writers` }),
+      providesTags: ["BeatWriters"],
+    }),
+
+    setWriter: builder.mutation<
+      BeatWriter,
+      { nflTeam: string; writerName: string; outlet: string; note?: string }
+    >({
+      query: ({ nflTeam, writerName, outlet, note }) => ({
+        url: `${inseasonUrl}/writers`,
+        method: "POST",
+        params: {
+          nfl_team: nflTeam,
+          writer_name: writerName,
+          outlet,
+          ...(note && { note }),
+        },
+      }),
+      invalidatesTags: ["BeatWriters"],
+    }),
+
+    seedWriters: builder.mutation<BeatWriterSeedResult, void>({
+      query: () => ({ url: `${inseasonUrl}/writers/seed`, method: "POST" }),
+      invalidatesTags: ["BeatWriters"],
+    }),
+
+    deleteWriter: builder.mutation<{ deleted: string }, { nflTeam: string }>({
+      query: ({ nflTeam }) => ({
+        url: `${inseasonUrl}/writers/${encodeURIComponent(nflTeam)}`,
+        method: "DELETE",
+      }),
+      invalidatesTags: ["BeatWriters"],
+    }),
+
+    // D3: the manual Grok bridge. getGrokPrompt is pure string assembly
+    // from cached data (no fetch, no LLM call); the paste-back flow is
+    // parse (preview, no save) then createPlayerNote (re-parses server
+    // side and saves) — the UI never trusts the preview round-trip.
+    getGrokPrompt: builder.query<
+      GrokPrompt,
+      {
+        player: string;
+        kind: "beat_check" | "injury_timeline" | "usage_context";
+        season?: number;
+        injury?: string;
+        context?: string;
+      }
+    >({
+      query: ({ player, kind, season, injury, context }) => ({
+        url: `${inseasonUrl}/grok_prompt`,
+        params: {
+          player,
+          kind,
+          ...(season != null && { season }),
+          ...(injury && { injury }),
+          ...(context && { context }),
+        },
+      }),
+    }),
+
+    parsePlayerNote: builder.mutation<
+      GrokParsePreview,
+      { rawText: string; playerName?: string; season?: number; week?: number }
+    >({
+      query: ({ rawText, playerName, season, week }) => ({
+        url: `${inseasonUrl}/player_note/parse`,
+        method: "POST",
+        body: {
+          raw_text: rawText,
+          player_name: playerName,
+          season,
+          week,
+        },
+      }),
+    }),
+
+    createPlayerNote: builder.mutation<
+      PlayerNote,
+      {
+        playerName: string;
+        kind: "beat_check" | "injury_timeline" | "usage_context";
+        promptText: string;
+        rawText: string;
+        season: number;
+        week: number;
+        summary?: string;
+        statusSignal?: string;
+      }
+    >({
+      query: ({
+        playerName,
+        kind,
+        promptText,
+        rawText,
+        season,
+        week,
+        summary,
+        statusSignal,
+      }) => ({
+        url: `${inseasonUrl}/player_note`,
+        method: "POST",
+        body: {
+          player_name: playerName,
+          kind,
+          prompt_text: promptText,
+          raw_text: rawText,
+          season,
+          week,
+          summary,
+          status_signal: statusSignal,
+        },
+      }),
+      invalidatesTags: ["PlayerNotes"],
+    }),
+
+    getPlayerNotes: builder.query<
+      { notes: PlayerNote[] },
+      { player?: string; week?: number; season?: number } | void
+    >({
+      query: (args) => ({
+        url: `${inseasonUrl}/player_notes`,
+        params: {
+          ...(args?.player && { player: args.player }),
+          ...(args?.week != null && { week: args.week }),
+          ...(args?.season != null && { season: args.season }),
+        },
+      }),
+      providesTags: ["PlayerNotes"],
+    }),
+
+    deletePlayerNote: builder.mutation<{ deleted: boolean }, { noteId: string }>({
+      query: ({ noteId }) => ({
+        url: `${inseasonUrl}/player_note/${encodeURIComponent(noteId)}`,
+        method: "DELETE",
+      }),
+      invalidatesTags: ["PlayerNotes"],
+    }),
+
     // The ONLY route in this file that touches ESPN — always an explicit
     // user action ("Sync now"), never triggered by switching league/team.
     syncLeague: builder.mutation<
@@ -294,5 +447,15 @@ export const {
   useSetHandcuffMutation,
   useSeedHandcuffsMutation,
   useDeleteHandcuffMutation,
+  useGetWritersQuery,
+  useSetWriterMutation,
+  useSeedWritersMutation,
+  useDeleteWriterMutation,
+  useGetGrokPromptQuery,
+  useLazyGetGrokPromptQuery,
+  useParsePlayerNoteMutation,
+  useCreatePlayerNoteMutation,
+  useGetPlayerNotesQuery,
+  useDeletePlayerNoteMutation,
   useSyncLeagueMutation,
 } = inseasonApi;

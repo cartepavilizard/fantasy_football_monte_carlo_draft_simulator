@@ -56,7 +56,13 @@ SYNC_SECTIONS = [
     "transactions",
     "free_agents",
     "pro_schedule",  # league-independent: logged with espn_league_id=None
+    "practice_reports",  # league-independent (D2): logged with espn_league_id=None
 ]
+
+# Sections logged with espn_league_id=None regardless of which league's
+# envelope is asking — league_freshness() below must look them up the
+# same way it looks up pro_schedule, not per-league
+LEAGUE_INDEPENDENT_SECTIONS = {"pro_schedule", "practice_reports"}
 
 
 # --- league + teams ----------------------------------------------------------
@@ -396,8 +402,8 @@ async def league_freshness(
     auth_expired = False
     warnings = []
     for section in SYNC_SECTIONS:
-        # pro_schedule is league-independent; its logs carry no league id
-        league_key = None if section == "pro_schedule" else espn_league_id
+        # league-independent sections carry no league id on their logs
+        league_key = None if section in LEAGUE_INDEPENDENT_SECTIONS else espn_league_id
         last_attempt = await _latest_log(engine, league_key, season, section)
         last_success = (
             last_attempt

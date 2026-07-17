@@ -7,15 +7,20 @@ import {
   FiAlertTriangle,
   FiCheckCircle,
   FiClock,
+  FiMessageCircle,
   FiRefreshCw,
   FiShield,
   FiTrash2,
   FiTrendingDown,
   FiTrendingUp,
+  FiUsers,
 } from "react-icons/fi";
 
 import {
+  useCreatePlayerNoteMutation,
   useDeleteHandcuffMutation,
+  useDeletePlayerNoteMutation,
+  useDeleteWriterMutation,
   useGetFreeAgentsQuery,
   useGetHandcuffsQuery,
   useGetLeagueHandcuffsQuery,
@@ -23,18 +28,25 @@ import {
   useGetLocksQuery,
   useGetMatchupsQuery,
   useGetOverviewQuery,
+  useGetPlayerNotesQuery,
   useGetPlayoffSosQuery,
   useGetRosterQuery,
   useGetStreamingQuery,
   useGetTransactionsQuery,
   useGetUsageShiftsQuery,
+  useGetWritersQuery,
+  useLazyGetGrokPromptQuery,
+  useParsePlayerNoteMutation,
   useSeedHandcuffsMutation,
+  useSeedWritersMutation,
   useSetHandcuffMutation,
+  useSetWriterMutation,
   useSyncLeagueMutation,
 } from "@/api/services/inseason";
 import { title, subtitle } from "@/components/primitives";
 import { VarianceFlag } from "@/components/variance-flag";
 import {
+  GrokParsePreview,
   HandcuffFlag,
   HomerCheck,
   InSeasonOverviewEntry,
@@ -525,6 +537,140 @@ export default function InSeasonPage() {
     }
   };
 
+  // D1 writer-panel CRUD: create/repoint (marked manual, survives
+  // re-seeds), seed missing teams, delete (soft — a re-seed won't
+  // resurrect it). Same three endpoints the panel's table drives.
+  const writersQuery = useGetWritersQuery();
+  const [setWriter, { isLoading: isSavingWriter }] = useSetWriterMutation();
+  const [seedWriters, { isLoading: isSeedingWriters }] = useSeedWritersMutation();
+  const [deleteWriter] = useDeleteWriterMutation();
+  const [writerForm, setWriterForm] = useState({
+    nflTeam: "",
+    writerName: "",
+    outlet: "",
+    note: "",
+  });
+  const [writerMessage, setWriterMessage] = useState("");
+
+  const handleSaveWriter = async () => {
+    if (
+      !writerForm.nflTeam.trim() ||
+      !writerForm.writerName.trim() ||
+      !writerForm.outlet.trim()
+    )
+      return;
+    try {
+      await setWriter({
+        nflTeam: writerForm.nflTeam.trim(),
+        writerName: writerForm.writerName.trim(),
+        outlet: writerForm.outlet.trim(),
+        note: writerForm.note.trim() || undefined,
+      }).unwrap();
+      setWriterForm({ nflTeam: "", writerName: "", outlet: "", note: "" });
+      setWriterMessage("");
+    } catch {
+      setWriterMessage("Failed to save that writer.");
+    }
+  };
+
+  const handleSeedWriters = async () => {
+    try {
+      const result = await seedWriters().unwrap();
+
+      setWriterMessage(
+        `Seeded ${result.created} new writer${result.created === 1 ? "" : "s"} (${result.skipped} already known).`,
+      );
+    } catch {
+      setWriterMessage("Seeding failed.");
+    }
+  };
+
+  const handleDeleteWriter = async (nflTeam: string) => {
+    try {
+      await deleteWriter({ nflTeam }).unwrap();
+    } catch {
+      setWriterMessage(`Failed to delete ${nflTeam}.`);
+    }
+  };
+
+  // D3 manual Grok bridge: generate a prompt for one player, paste
+  // Grok's answer back, preview the parse + skepticism badges, then
+  // save. No LLM/xAI call happens anywhere in this codebase — the
+  // parser is deterministic block extraction of what the user pastes.
+  const [grokPlayer, setGrokPlayer] = useState("");
+  const [grokKind, setGrokKind] = useState<
+    "beat_check" | "injury_timeline" | "usage_context"
+  >("beat_check");
+  const [fetchGrokPrompt, { data: grokPromptData, isFetching: isGeneratingPrompt }] =
+    useLazyGetGrokPromptQuery();
+  const [grokMessage, setGrokMessage] = useState("");
+  const [grokRawText, setGrokRawText] = useState("");
+  const [parsePlayerNote, { isLoading: isParsingNote }] = useParsePlayerNoteMutation();
+  const [grokPreview, setGrokPreview] = useState<GrokParsePreview | null>(null);
+  const [manualStatusSignal, setManualStatusSignal] = useState("");
+  const [manualSummary, setManualSummary] = useState("");
+  const [createPlayerNote, { isLoading: isSavingNote }] = useCreatePlayerNoteMutation();
+  const notesQuery = useGetPlayerNotesQuery(
+    grokPlayer.trim() ? { player: grokPlayer.trim() } : undefined,
+  );
+  const [deletePlayerNote] = useDeletePlayerNoteMutation();
+
+  const handleGenerateGrokPrompt = async () => {
+    if (!grokPlayer.trim()) return;
+    setGrokMessage("");
+    setGrokPreview(null);
+    try {
+      await fetchGrokPrompt({ player: grokPlayer.trim(), kind: grokKind }).unwrap();
+    } catch {
+      setGrokMessage(
+        `No cached data for "${grokPlayer.trim()}" — sync a league first.`,
+      );
+    }
+  };
+
+  const handlePreviewGrokPaste = async () => {
+    if (!grokRawText.trim()) return;
+    try {
+      const preview = await parsePlayerNote({
+        rawText: grokRawText,
+        playerName: grokPlayer.trim() || undefined,
+        week: usageWeek,
+        season: overview?.season,
+      }).unwrap();
+
+      setGrokPreview(preview);
+      setManualStatusSignal(preview.status_signal ?? "");
+      setManualSummary(preview.summary ?? "");
+    } catch {
+      setGrokMessage("Failed to parse that paste.");
+    }
+  };
+
+  const handleSaveGrokNote = async () => {
+    if (!grokPlayer.trim() || !grokRawText.trim()) return;
+    try {
+      await createPlayerNote({
+        playerName: grokPlayer.trim(),
+        kind: grokKind,
+        // prompt_text is required by the model for provenance, but a
+        // note is still savable when generating it failed/was skipped
+        // (e.g. the player isn't in cached roster/FA data yet) — the
+        // backend doesn't require a resolvable player to save a note.
+        promptText: grokPromptData?.prompt_text ?? "",
+        rawText: grokRawText,
+        season: overview?.season ?? new Date().getFullYear(),
+        week: usageWeek,
+        summary: manualSummary.trim() || undefined,
+        statusSignal: manualStatusSignal || undefined,
+      }).unwrap();
+      setGrokRawText("");
+      setGrokPreview(null);
+      setGrokMessage("Saved.");
+    } catch {
+      setGrokMessage("Failed to save that note.");
+    }
+  };
+
   const handleSync = async () => {
     setSyncMessage("");
     try {
@@ -1001,6 +1147,351 @@ export default function InSeasonPage() {
             </table>
           )}
         </div>
+      </div>
+
+      {/* Beat-writer directory (D1) — curated team -> writer table
+          (CRUD + seed). D3's beat_check prompt template joins this by
+          nfl_team. */}
+      <div className={cardClass}>
+        <div>
+          <h3 className="text-xl">
+            <FiUsers className="inline mb-1 mr-1" />
+            Beat Writers
+          </h3>
+          <p className="text-sm text-default-500">
+            Curated team → beat-writer directory. Rows this user deletes or
+            repoints stay that way — re-seeding only fills in what&apos;s
+            missing.
+          </p>
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <h4 className="text-sm font-bold text-default-500">Directory</h4>
+            <Button
+              disabled={isSeedingWriters}
+              size="sm"
+              onClick={handleSeedWriters}
+            >
+              {isSeedingWriters ? <Spinner size="sm" /> : "Seed missing teams"}
+            </Button>
+          </div>
+
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="flex flex-col gap-1 text-xs">
+              Team
+              <input
+                className={`${selectClass} w-16`}
+                placeholder="SEA"
+                value={writerForm.nflTeam}
+                onChange={(e) =>
+                  setWriterForm({ ...writerForm, nflTeam: e.target.value })
+                }
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-xs">
+              Writer
+              <input
+                className={`${selectClass} w-40`}
+                placeholder="Writer name"
+                value={writerForm.writerName}
+                onChange={(e) =>
+                  setWriterForm({ ...writerForm, writerName: e.target.value })
+                }
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-xs">
+              Outlet
+              <input
+                className={`${selectClass} w-40`}
+                placeholder="Outlet"
+                value={writerForm.outlet}
+                onChange={(e) =>
+                  setWriterForm({ ...writerForm, outlet: e.target.value })
+                }
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-xs">
+              Note
+              <input
+                className={`${selectClass} w-40`}
+                placeholder="optional"
+                value={writerForm.note}
+                onChange={(e) =>
+                  setWriterForm({ ...writerForm, note: e.target.value })
+                }
+              />
+            </label>
+            <Button
+              color="primary"
+              disabled={
+                isSavingWriter ||
+                !writerForm.nflTeam.trim() ||
+                !writerForm.writerName.trim() ||
+                !writerForm.outlet.trim()
+              }
+              size="sm"
+              onClick={handleSaveWriter}
+            >
+              {isSavingWriter ? <Spinner size="sm" /> : "Save"}
+            </Button>
+          </div>
+          {writerMessage && (
+            <p className="text-sm text-default-500">{writerMessage}</p>
+          )}
+
+          {writersQuery.isLoading || !writersQuery.data ? (
+            <Spinner />
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-default-500">
+                  <th className="pb-1">Team</th>
+                  <th className="pb-1">Writer</th>
+                  <th className="pb-1">Outlet</th>
+                  <th className="pb-1">Note</th>
+                  <th className="pb-1">Source</th>
+                  <th className="pb-1" />
+                </tr>
+              </thead>
+              <tbody>
+                {writersQuery.data.writers.map((writer) => (
+                  <tr
+                    key={writer.nfl_team}
+                    className="border-t border-default-100"
+                  >
+                    <td className="py-1">{writer.nfl_team}</td>
+                    <td className="py-1">{writer.writer_name}</td>
+                    <td className="py-1">{writer.outlet}</td>
+                    <td className="py-1 text-default-400">
+                      {writer.note ?? "—"}
+                    </td>
+                    <td className="py-1 text-default-400">{writer.source}</td>
+                    <td className="py-1 text-right">
+                      <button
+                        className="text-danger-500 hover:text-danger-700"
+                        title={`Delete ${writer.nfl_team}`}
+                        type="button"
+                        onClick={() => handleDeleteWriter(writer.nfl_team)}
+                      >
+                        <FiTrash2 />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+
+      {/* Manual Grok bridge (D3) — generate a prompt, paste Grok's
+          answer back, preview the parse + skepticism badges, save. No
+          LLM/xAI call happens anywhere in this codebase; the paste is
+          a deterministic block extraction, and every saved note stays
+          unverified by design — a human decides whether to trust it. */}
+      <div className={cardClass}>
+        <div>
+          <h3 className="text-xl">
+            <FiMessageCircle className="inline mb-1 mr-1" />
+            Grok Bridge (manual research)
+          </h3>
+          <p className="text-sm text-default-500">
+            Generate a prompt, run it yourself in a free xAI account, paste
+            the answer back. Nothing here calls an LLM, and nothing saved
+            here is ever auto-trusted.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="flex flex-col gap-1 text-xs">
+            Player
+            <input
+              className={`${selectClass} w-40`}
+              placeholder="Player name"
+              value={grokPlayer}
+              onChange={(e) => setGrokPlayer(e.target.value)}
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs">
+            Kind
+            <select
+              className={selectClass}
+              value={grokKind}
+              onChange={(e) =>
+                setGrokKind(e.target.value as typeof grokKind)
+              }
+            >
+              <option value="beat_check">Beat check (last 48h)</option>
+              <option value="injury_timeline">Injury timeline</option>
+              <option value="usage_context">Usage / role context</option>
+            </select>
+          </label>
+          <Button
+            disabled={isGeneratingPrompt || !grokPlayer.trim()}
+            size="sm"
+            onClick={handleGenerateGrokPrompt}
+          >
+            {isGeneratingPrompt ? <Spinner size="sm" /> : "Generate prompt"}
+          </Button>
+        </div>
+        {grokMessage && (
+          <p className="text-sm text-default-500">{grokMessage}</p>
+        )}
+
+        {grokPromptData && (
+          <div className="flex flex-col gap-1">
+            <h4 className="text-sm font-bold text-default-500">
+              Prompt (copy into your xAI account)
+              {grokPromptData.nfl_team && ` — ${grokPromptData.nfl_team}`}
+            </h4>
+            <textarea
+              readOnly
+              className={`${selectClass} w-full h-40 font-mono text-xs`}
+              value={grokPromptData.prompt_text}
+            />
+          </div>
+        )}
+
+        <div className="flex flex-col gap-1">
+          <h4 className="text-sm font-bold text-default-500">
+            Paste Grok&apos;s answer
+          </h4>
+          <textarea
+            className={`${selectClass} w-full h-32 font-mono text-xs`}
+            placeholder="Paste the full answer, including the ---GROK-NOTE--- block"
+            value={grokRawText}
+            onChange={(e) => {
+              setGrokRawText(e.target.value);
+              setGrokPreview(null);
+            }}
+          />
+          <div className="flex gap-2">
+            <Button
+              disabled={isParsingNote || !grokRawText.trim()}
+              size="sm"
+              onClick={handlePreviewGrokPaste}
+            >
+              {isParsingNote ? <Spinner size="sm" /> : "Preview parse"}
+            </Button>
+          </div>
+        </div>
+
+        {grokPreview && (
+          <div className="flex flex-col gap-2 rounded-medium border border-default-200 p-3">
+            <div className="flex flex-wrap gap-2 text-xs">
+              <span
+                className={`rounded-full px-2 py-0.5 ${
+                  grokPreview.parsed_block
+                    ? "bg-success-100 text-success-700"
+                    : "bg-warning-100 text-warning-700"
+                }`}
+              >
+                {grokPreview.parsed_block
+                  ? "block parsed"
+                  : "no block found — fill in manually"}
+              </span>
+              {grokPreview.stale_risk && (
+                <span className="rounded-full bg-warning-100 px-2 py-0.5 text-warning-700">
+                  undated or stale sources
+                </span>
+              )}
+              {grokPreview.conflicts.map((conflict, i) => (
+                <span
+                  key={i}
+                  className="rounded-full bg-danger-100 px-2 py-0.5 text-danger-700"
+                >
+                  {conflict}
+                </span>
+              ))}
+              <span className="rounded-full bg-default-100 px-2 py-0.5 text-default-500">
+                manual Grok research — unverified
+              </span>
+            </div>
+
+            <div className="flex flex-wrap items-end gap-2">
+              <label className="flex flex-col gap-1 text-xs">
+                Status signal
+                <select
+                  className={selectClass}
+                  value={manualStatusSignal}
+                  onChange={(e) => setManualStatusSignal(e.target.value)}
+                >
+                  <option value="">— choose —</option>
+                  <option value="upgrade">Upgrade</option>
+                  <option value="downgrade">Downgrade</option>
+                  <option value="unchanged">Unchanged</option>
+                  <option value="unclear">Unclear</option>
+                </select>
+              </label>
+              <label className="flex flex-col gap-1 text-xs">
+                Summary
+                <input
+                  className={`${selectClass} w-64`}
+                  value={manualSummary}
+                  onChange={(e) => setManualSummary(e.target.value)}
+                />
+              </label>
+              <Button
+                color="primary"
+                disabled={isSavingNote || !grokPlayer.trim() || !grokRawText.trim()}
+                size="sm"
+                onClick={handleSaveGrokNote}
+              >
+                {isSavingNote ? <Spinner size="sm" /> : "Save note"}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {grokPlayer.trim() && (
+          <div className="flex flex-col gap-1">
+            <h4 className="text-sm font-bold text-default-500">
+              Saved notes for {grokPlayer.trim()}
+            </h4>
+            {notesQuery.isLoading || !notesQuery.data ? (
+              <Spinner />
+            ) : notesQuery.data.notes.length === 0 ? (
+              <p className="text-sm text-default-500">No notes saved yet.</p>
+            ) : (
+              <ul className="flex flex-col gap-2">
+                {notesQuery.data.notes.map((note) => (
+                  <li
+                    key={note.id}
+                    className="flex flex-col gap-1 border-t border-default-100 pt-2 text-sm"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold">
+                        {note.kind} — week {note.week}
+                        {note.status_signal && ` — ${note.status_signal}`}
+                      </span>
+                      <button
+                        className="text-danger-500 hover:text-danger-700"
+                        title="Delete note"
+                        type="button"
+                        onClick={() => deletePlayerNote({ noteId: note.id })}
+                      >
+                        <FiTrash2 />
+                      </button>
+                    </div>
+                    {note.summary && <p>{note.summary}</p>}
+                    <div className="flex flex-wrap gap-2 text-xs text-default-500">
+                      {note.stale_risk && (
+                        <span className="text-warning-600">stale risk</span>
+                      )}
+                      {note.conflicts.map((conflict, i) => (
+                        <span key={i} className="text-danger-600">
+                          {conflict}
+                        </span>
+                      ))}
+                      <span>unverified — manual research</span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
       </div>
 
       {leagueId !== null && teamId !== null && (

@@ -605,6 +605,73 @@ export type HandcuffFlagsData = {
   handcuffs: HandcuffFlag[];
 };
 
+// The curated team -> beat-writer directory (D1); mirrors BeatWriter in
+// backend/models/beat_writers.py. source "seed" survives the pre-season
+// curation pass, "manual" once a user edits/repoints/deletes it.
+export type BeatWriter = {
+  nfl_team: string;
+  writer_name: string;
+  outlet: string;
+  note: string | null;
+  source: "seed" | "manual";
+  active: boolean;
+  updated_at: string;
+};
+
+export type BeatWriterSeedResult = {
+  created: number;
+  skipped: number;
+};
+
+// D3's generated Grok prompt (GET /inseason/grok_prompt) — the exact
+// string to paste into a free xAI account, plus which team it resolved.
+export type GrokPrompt = {
+  prompt_text: string;
+  nfl_team: string | null;
+  kind: "beat_check" | "injury_timeline" | "usage_context";
+};
+
+// Shared shape of both the parse-preview response and the parsed half
+// of a saved PlayerNote (backend/models/player_notes.py's parser output
+// plus its two skepticism checks; #3's quarantine is structural).
+export type GrokParsePreview = {
+  parsed_block: boolean;
+  player: string | null;
+  status_signal: "upgrade" | "downgrade" | "unchanged" | "unclear" | null;
+  summary: string | null;
+  sources: string[];
+  newest_source_date: string | null;
+  confidence: "reported" | "rumored" | "speculation" | null;
+  stale_risk: boolean;
+  conflicts: string[];
+};
+
+// One saved manual Grok paste-back (D3); mirrors PlayerNote in
+// backend/models/player_notes.py. verified is always false — no code
+// path sets it true, by design (the human reading the note decides).
+// id is a string ObjectId — unlike most in-season types this one is
+// exposed, since deleting a note needs it (no other natural key).
+export type PlayerNote = {
+  id: string;
+  season: number;
+  week: number;
+  player_name: string;
+  nfl_team: string | null;
+  kind: "beat_check" | "injury_timeline" | "usage_context";
+  prompt_text: string;
+  raw_text: string;
+  summary: string | null;
+  status_signal: "upgrade" | "downgrade" | "unchanged" | "unclear" | null;
+  grok_confidence: "reported" | "rumored" | "speculation" | null;
+  sources: string[];
+  newest_source_date: string | null;
+  parsed_block: boolean;
+  stale_risk: boolean;
+  conflicts: string[];
+  verified: false;
+  created_at: string;
+};
+
 // POST /inseason/sync — the one route that talks to ESPN; loose section
 // typing since counts vary (teams/matchups/players/transactions)
 export type SyncSectionResult = {

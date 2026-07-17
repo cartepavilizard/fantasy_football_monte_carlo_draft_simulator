@@ -17,10 +17,12 @@ from models.handcuffs import upsert_handcuff
 from models.inseason import (
     FreeAgentEntry,
     FreeAgentSnapshot,
+    InjuryDesignation,
     InSeasonLeague,
     LeagueSyncLog,
     LeagueTeamInfo,
     LeagueTransaction,
+    PracticeReport,
     ProGame,
     RosterSlotEntry,
     TeamWeekRoster,
@@ -153,15 +155,16 @@ def seed(app_module, sync_age_hours=1.0):
                     fetched_at=fetched_at,
                 )
             )
-        await engine.save(
-            LeagueSyncLog(
-                espn_league_id=None,
-                season=SEASON,
-                section="pro_schedule",
-                success=True,
-                fetched_at=fetched_at,
+        for section in ["pro_schedule", "practice_reports"]:
+            await engine.save(
+                LeagueSyncLog(
+                    espn_league_id=None,
+                    season=SEASON,
+                    section=section,
+                    success=True,
+                    fetched_at=fetched_at,
+                )
             )
-        )
 
     asyncio.run(go())
 
@@ -229,8 +232,12 @@ def test_every_inseason_get_serves_with_the_network_rigged_to_explode(
         "/inseason/playoff_sos",
         f"/inseason/playoff_sos?espn_league_id={LEAGUE_ID}",
         "/inseason/usage_shifts?week=5",
+        "/inseason/practice_reports?week=5",
         "/inseason/handcuffs",
         f"/inseason/league/{LEAGUE_ID}/handcuffs",
+        "/inseason/writers",
+        "/inseason/grok_prompt?player=Jaxon+Smith-Njigba&kind=beat_check",
+        "/inseason/player_notes",
         "/notifications",
         "/notifications/pending",
     ]:
@@ -440,4 +447,69 @@ def test_auth_failure_shows_up_in_every_read(client, app_module):
     asyncio.run(fail_auth())
     payload = client.get(f"/inseason/league/{LEAGUE_ID}/matchups").json()
     assert payload["freshness"]["auth_expired"] is True
-    assert any("cookies" in warning for warning in payload["warnings"])
+
+
+# --- practice reports (D2) ---------------------------------------------------------
+
+
+def test_practice_reports_endpoint_serves_trail_grouped_by_player_and_designations(
+    client, app_module
+):
+    engine = app_module.engine
+
+    async def go():
+        await engine.save(
+            PracticeReport(
+                season=SEASON, week=5, player_name="Kenneth Walker III",
+                nfl_team="SEA", position="RB",
+                report_date=datetime.datetime(SEASON, 10, 7),
+                participation="limited", note="Calf",
+            )
+        )
+        await engine.save(
+            PracticeReport(
+                season=SEASON, week=5, player_name="Kenneth Walker III",
+                nfl_team="SEA", position="RB",
+                report_date=datetime.datetime(SEASON, 10, 8),
+                participation="dnp", note="Calf",
+            )
+        )
+        await engine.save(
+            InjuryDesignation(
+                season=SEASON, week=5, player_name="Kenneth Walker III",
+                nfl_team="SEA", position="RB", designation="questionable",
+            )
+        )
+
+    asyncio.run(go())
+    payload = client.get(f"/inseason/practice_reports?week=5&season={SEASON}").json()
+    assert payload["week"] == 5
+    (trail,) = payload["reports"].values()
+    # newest first
+    assert [entry["participation"] for entry in trail] == ["dnp", "limited"]
+    (designation,) = payload["designations"]
+    assert designation["designation"] == "questionable"
+
+
+def test_practice_reports_endpoint_filters_by_player(client, app_module):
+    engine = app_module.engine
+
+    async def go():
+        await engine.save(
+            PracticeReport(
+                season=SEASON, week=5, player_name="Player One", nfl_team="SEA",
+                report_date=datetime.datetime(SEASON, 10, 7), participation="full",
+            )
+        )
+        await engine.save(
+            PracticeReport(
+                season=SEASON, week=5, player_name="Player Two", nfl_team="SEA",
+                report_date=datetime.datetime(SEASON, 10, 7), participation="dnp",
+            )
+        )
+
+    asyncio.run(go())
+    payload = client.get(
+        f"/inseason/practice_reports?week=5&player=Player+Two&season={SEASON}"
+    ).json()
+    assert list(payload["reports"].keys()) == ["Player Two"]

@@ -433,3 +433,9 @@ class MonteCarloSimulationResult(BaseModel):
     # A6: neutral value comparisons, present only for positions whose
     # suggested pick is a HOMER_TEAM player
     homer_checks: Dict[str, HomerCheck] = {}
+    # F1: stack flags — pure decoration (zero effect on any average,
+    # ranking, or suggestion). Per-position flag for a suggested player
+    # who forms a same-NFL-team stack with a player already on the
+    # simulator team's current roster; absent positions have no stack.
+    # Defaults to empty so pre-F1 payloads still validate.
+    stack_flags: Dict[str, dict] = {}

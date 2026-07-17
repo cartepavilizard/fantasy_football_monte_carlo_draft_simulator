@@ -38,6 +38,7 @@ from models.beat_writers import (
     upsert_beat_writer,
 )
 from models.config import DRAFT_YEAR
+from models.correlation_flags import stacks_for_roster
 from models.counterproposals import generate_counters
 from models.handcuffs import (
     available_handcuff_flags,
@@ -334,6 +335,101 @@ class TradeProposal(BaseModel):
     availability_overrides: Optional[Dict[int, Dict[int, float]]] = None
 
 
+def _stack_view(ctx, player_id):
+    """Read-only view of one roster player as the pure correlation_flags
+    functions expect it. The weekly projection is E1's neutral `rate`
+    (spec §4.2: "using E1's rate() numbers for sigma"). Pure: ctx is read
+    only, a fresh dict is returned."""
+    meta = ctx.players.get(player_id, {})
+    return {
+        "name": meta.get("name"),
+        "position": meta.get("position"),
+        "nfl_team": meta.get("nfl_team"),
+        "weekly_projection": ctx.rates.get(player_id),
+    }
+
+
+def _annotate_trade_stack_flags(
+    evaluation, ctx, team_a, team_b, sends_a, sends_b
+):
+    """F1 decoration of an E1 evaluate_trade dict (spec §4.2). For each
+    player RECEIVED by a side, flag a same-NFL-team stack against that
+    side's POST-TRADE roster. Follows E2's shallow-copy precedent: E1's
+    dict is never mutated in place — a copy is returned with a `stack`
+    field attached to each RECEIVING player's copied entry.
+
+    Zero-effect (spec §7): decoration adds the `stack` field only; no
+    average, ranking, verdict, or value changes. Stripping every `stack`
+    field yields byte-identical E1 output."""
+    before_a = list(ctx.rosters.get(team_a, []))
+    before_b = list(ctx.rosters.get(team_b, []))
+    # Post-trade composition: each side keeps its non-sent players and
+    # adds the other side's outgoing set (evaluate_trade §4.3).
+    after_a = [p for p in before_a if p not in sends_a] + list(sends_b)
+    after_b = [p for p in before_b if p not in sends_b] + list(sends_a)
+    after_a_views = [_stack_view(ctx, pid) for pid in after_a]
+    after_b_views = [_stack_view(ctx, pid) for pid in after_b]
+
+    # Side A receives sends_b; side B receives sends_a. A flag is built
+    # for each received player against its new roster (which already
+    # includes any teammates arriving in the same deal — spec §5 edge:
+    # a QB+WR pair travelling together flags on both).
+    flags_for_a = {
+        pid: stacks_for_roster(_stack_view(ctx, pid), after_a_views)
+        for pid in sends_b
+    }
+    flags_for_b = {
+        pid: stacks_for_roster(_stack_view(ctx, pid), after_b_views)
+        for pid in sends_a
+    }
+
+    annotated = dict(evaluation)
+    new_sends_a = []
+    for entry in evaluation.get("sends_a", []) or []:
+        copy = dict(entry)
+        flag = flags_for_b.get(entry.get("player_id"))
+        if flag:
+            copy["stack"] = flag
+        new_sends_a.append(copy)
+    new_sends_b = []
+    for entry in evaluation.get("sends_b", []) or []:
+        copy = dict(entry)
+        flag = flags_for_a.get(entry.get("player_id"))
+        if flag:
+            copy["stack"] = flag
+        new_sends_b.append(copy)
+    annotated["sends_a"] = new_sends_a
+    annotated["sends_b"] = new_sends_b
+    return annotated
+
+
+def _annotate_counters_stack_flags(
+    data, ctx, team_a, team_b, sends_a, sends_b
+):
+    """F1 decoration over E2's counters response. Annotates the original
+    evaluation AND each counter's evaluation. Shallow-copies at every
+    level so neither E1's nor E2's output is mutated in place; only the
+    `stack` field is added. Zero-effect on every pre-existing key."""
+    annotated = dict(data)
+    annotated["original"] = _annotate_trade_stack_flags(
+        data["original"], ctx, team_a, team_b, sends_a, sends_b
+    )
+    new_counters = []
+    for counter in data.get("counters", []) or []:
+        copy = dict(counter)
+        copy["evaluation"] = _annotate_trade_stack_flags(
+            counter["evaluation"],
+            ctx,
+            team_a,
+            team_b,
+            counter.get("sends_a", []),
+            counter.get("sends_b", []),
+        )
+        new_counters.append(copy)
+    annotated["counters"] = new_counters
+    return annotated
+
+
 @router.post("/league/{espn_league_id}/trade/evaluate")
 async def post_trade_evaluate(espn_league_id: int, proposal: TradeProposal):
     """
@@ -362,6 +458,9 @@ async def post_trade_evaluate(espn_league_id: int, proposal: TradeProposal):
         proposal.sends_a,
         proposal.sends_b,
         overrides=proposal.availability_overrides,
+    )
+    data = _annotate_trade_stack_flags(
+        data, ctx, proposal.team_a, proposal.team_b, proposal.sends_a, proposal.sends_b
     )
     return await _envelope(engine, espn_league_id, season, data)
 
@@ -394,7 +493,11 @@ async def post_trade_counters(espn_league_id: int, proposal: TradeProposal):
         proposal.sends_b,
         overrides=proposal.availability_overrides,
     )
+    data = _annotate_counters_stack_flags(
+        data, ctx, proposal.team_a, proposal.team_b, proposal.sends_a, proposal.sends_b
+    )
     return await _envelope(engine, espn_league_id, season, data)
+
 
 
 @router.get("/league/{espn_league_id}/player_values")

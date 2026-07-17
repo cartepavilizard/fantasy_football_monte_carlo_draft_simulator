@@ -60,6 +60,7 @@ from models.scarcity import (
     scarcity_call,
     tier_breakdown,
 )
+from models.correlation_flags import stacks_for_roster
 from models.homer import homer_check
 from models.notifications import ensure_lock_reminders
 from models.sources import BlendedRanking, HistoricalPick, OwnerAlias, OwnerProfile
@@ -612,6 +613,39 @@ def monte_carlo_draft(
             if check:
                 homer_checks[position] = check
 
+    # F1: stack flags — decoration only, zero effect on selection/scoring.
+    # For each suggested player, look at the simulator team's CURRENT
+    # roster (players already drafted to it) and flag a same-NFL-team
+    # QB+pass-catcher stack if one exists. Weekly projection is the
+    # season number /17 (spec §4.1: "converts season -> weekly by /17 if
+    # that's what's available"). REUSE the pure correlation_flags math;
+    # never duplicate it.
+    stack_flags = {}
+    sim_team = league.teams[simulator_team[0]]
+    year_key = str(DRAFT_YEAR)
+
+    def _stack_view(player):
+        proj = player.points.get(year_key)
+        weekly = (
+            proj.projected_points / 17.0
+            if proj and proj.projected_points
+            else None
+        )
+        return {
+            "name": player.name,
+            "position": player.position,
+            "nfl_team": player.nfl_team,
+            "weekly_projection": weekly,
+        }
+
+    sim_roster_views = [_stack_view(p) for p in sim_team.roster]
+    for position, candidate in candidates.items():
+        flag = stacks_for_roster(
+            _stack_view(candidate), sim_roster_views
+        )
+        if flag:
+            stack_flags[position] = flag
+
     # Begin the simulation
     start_time = time.time()
     i = 0
@@ -648,6 +682,7 @@ def monte_carlo_draft(
     results["iterations"] = i
     results["suggested"] = suggested
     results["homer_checks"] = homer_checks
+    results["stack_flags"] = stack_flags
     return MonteCarloSimulationResult(**results)
 
 

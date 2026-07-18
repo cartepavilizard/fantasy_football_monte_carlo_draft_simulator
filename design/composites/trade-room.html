@@ -1,0 +1,376 @@
+③  TRADE ROOM -->
+    <div>
+      <div style="font-family:var(--font-head);font-weight:700;text-transform:uppercase;letter-spacing:.05em;font-size:var(--fs-md);margin-bottom:var(--sp-2);color:var(--green);">③ Trade Room</div>
+      <div style="border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;background:var(--bg);box-shadow:0 12px 44px rgba(0,0,0,.45);">
+        <div style="height:var(--nav-h);background:var(--navy);display:flex;align-items:center;padding:0 var(--sp-3);gap:var(--sp-4);position:relative;overflow:hidden;border-bottom:1px solid var(--border);">
+          <div style="position:absolute;inset:0;background-image:var(--feather);background-size:34px 40px;"></div>
+          <div style="position:relative;display:flex;align-items:center;gap:8px;">{{ hawkLogo }}<span style="font-family:var(--font-display);font-size:var(--fs-lg);text-transform:uppercase;color:#fff;">Hawk Mode</span></div>
+          <nav style="position:relative;display:flex;gap:2px;">
+            <span style="font-family:var(--font-head);font-weight:600;text-transform:uppercase;font-size:var(--fs-sm);color:var(--grey);padding:6px 10px;">Home</span>
+            <span style="font-family:var(--font-head);font-weight:600;text-transform:uppercase;font-size:var(--fs-sm);color:var(--grey);padding:6px 10px;">Draft</span>
+            <span style="font-family:var(--font-head);font-weight:600;text-transform:uppercase;font-size:var(--fs-sm);color:var(--grey);padding:6px 10px;">In-Season</span>
+            <span style="font-family:var(--font-head);font-weight:700;text-transform:uppercase;font-size:var(--fs-sm);color:#fff;padding:6px 10px;background:rgba(105,190,40,.16);border-radius:var(--radius-sm);box-shadow:inset 0 -2px 0 var(--green);">Trade Room</span>
+          </nav>
+          <div style="position:relative;margin-left:auto;display:flex;align-items:center;gap:var(--sp-2);"><span style="font-family:var(--font-head);font-weight:700;text-transform:uppercase;font-size:var(--fs-xs);color:var(--warn);background:rgba(245,179,1,.12);border:1px solid var(--warn);border-radius:100px;padding:3px 10px;">◔ Sell Window</span><div style="width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,var(--green),var(--navy));border:1px solid var(--green);"></div></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1.35fr 1fr;gap:var(--sp-3);padding:var(--sp-3);align-items:start;">
+          <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;">
+            <div style="display:flex;align-items:center;padding:var(--sp-2) var(--sp-3);border-bottom:1px solid var(--border);background:var(--surface-2);"><span style="font-family:var(--font-head);font-weight:700;text-transform:uppercase;font-size:var(--fs-sm);letter-spacing:.05em;">Proposal Builder</span><span style="margin-left:auto;font-size:var(--fs-xs);color:var(--green);">Ghost Rams · Very Active</span></div>
+            <div style="display:grid;grid-template-columns:1fr 26px 1fr;">
+              <div style="padding:var(--sp-3);"><div style="font-family:var(--font-head);font-weight:700;text-transform:uppercase;font-size:var(--fs-xs);color:var(--green);margin-bottom:var(--sp-2);">You Give</div><div style="display:flex;flex-direction:column;gap:5px;"><sc-for list="{{ myRoster }}" as="p" hint-placeholder-count="5"><div style="display:flex;align-items:center;gap:7px;padding:5px 7px;border-radius:var(--radius-sm);border:1px solid {{ p.rowBd }};background:{{ p.rowBg }};"><sc-if value="{{ p.sel }}" hint-placeholder-val="{{ false }}"><span style="width:14px;height:14px;border-radius:4px;background:var(--green);color:#04240a;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;">✓</span></sc-if><sc-if value="{{ p.unsel }}" hint-placeholder-val="{{ true }}"><span style="width:14px;height:14px;border-radius:4px;border:1px solid var(--border-2);"></span></sc-if><span style="flex:1;font-size:var(--fs-sm);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ p.n }}</span><span style="font-size:9px;color:var(--text-mute);">{{ p.val }}</span></div></sc-for></div></div>
+              <div style="display:flex;align-items:center;justify-content:center;color:var(--green);background:var(--surface-2);border-left:1px solid var(--border);border-right:1px solid var(--border);">⇄</div>
+              <div style="padding:var(--sp-3);"><div style="font-family:var(--font-head);font-weight:700;text-transform:uppercase;font-size:var(--fs-xs);color:var(--info);margin-bottom:var(--sp-2);">You Get</div><div style="display:flex;flex-direction:column;gap:5px;"><sc-for list="{{ theirRoster }}" as="p" hint-placeholder-count="5"><div style="display:flex;align-items:center;gap:7px;padding:5px 7px;border-radius:var(--radius-sm);border:1px solid {{ p.rowBd }};background:{{ p.rowBg }};"><sc-if value="{{ p.sel }}" hint-placeholder-val="{{ false }}"><span style="width:14px;height:14px;border-radius:4px;background:var(--info);color:#04240a;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;">✓</span></sc-if><sc-if value="{{ p.unsel }}" hint-placeholder-val="{{ true }}"><span style="width:14px;height:14px;border-radius:4px;border:1px solid var(--border-2);"></span></sc-if><span style="flex:1;font-size:var(--fs-sm);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ p.n }}</span><span style="font-size:9px;color:var(--text-mute);">{{ p.val }}</span></div></sc-for></div></div>
+            </div>
+            <div style="display:flex;gap:var(--sp-2);padding:var(--sp-3);border-top:1px solid var(--border);background:var(--surface-2);"><button style="font-family:var(--font-head);font-weight:700;text-transform:uppercase;font-size:var(--fs-sm);background:var(--green);color:#04240a;border:none;border-radius:var(--radius-sm);padding:7px 14px;cursor:pointer;">Send Offer</button><button style="font-family:var(--font-head);font-weight:700;text-transform:uppercase;font-size:var(--fs-sm);background:transparent;color:var(--text);border:1px solid var(--border-2);border-radius:var(--radius-sm);padding:6px 13px;cursor:pointer;">Save</button></div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:var(--sp-3);">
+            <div style="position:relative;overflow:hidden;background:linear-gradient(120deg,rgba(105,190,40,.12),transparent 65%),var(--navy);border:1px solid var(--green);border-radius:var(--radius);padding:var(--sp-3);">
+              <div style="position:absolute;inset:0;background-image:var(--feather);background-size:34px 40px;"></div>
+              <div style="position:relative;"><div style="font-family:var(--font-display);font-size:var(--fs-xl);color:var(--green);text-transform:uppercase;line-height:1;">{{ tradeVerdict.title }}</div><p style="margin:var(--sp-2) 0 var(--sp-3);color:var(--text-dim);font-size:var(--fs-sm);">{{ tradeVerdict.line }}</p><div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:var(--sp-2);"><div style="background:rgba(0,0,0,.25);border:1px solid var(--border);border-radius:var(--radius-sm);padding:var(--sp-2);text-align:center;"><div style="font-size:9px;text-transform:uppercase;color:var(--grey);">Send</div><div style="font-family:var(--font-display);font-size:var(--fs-lg);color:#fff;line-height:1;">{{ tradeVerdict.mine }}</div></div><div style="background:rgba(0,0,0,.25);border:1px solid var(--border);border-radius:var(--radius-sm);padding:var(--sp-2);text-align:center;"><div style="font-size:9px;text-transform:uppercase;color:var(--grey);">Get</div><div style="font-family:var(--font-display);font-size:var(--fs-lg);color:#fff;line-height:1;">{{ tradeVerdict.theirs }}</div></div><div style="background:rgba(105,190,40,.16);border:1px solid var(--green);border-radius:var(--radius-sm);padding:var(--sp-2);text-align:center;"><div style="font-size:9px;text-transform:uppercase;color:var(--green);">Gap</div><div style="font-family:var(--font-display);font-size:var(--fs-lg);color:var(--green);line-height:1;">{{ tradeVerdict.gap }}</div></div></div></div>
+            </div>
+            <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;"><div style="display:flex;align-items:center;padding:var(--sp-2) var(--sp-3);border-bottom:1px solid var(--border);background:var(--surface-2);"><span style="font-family:var(--font-head);font-weight:700;text-transform:uppercase;font-size:var(--fs-sm);letter-spacing:.05em;">Message</span><button style="margin-left:auto;font-family:var(--font-head);font-weight:700;text-transform:uppercase;font-size:var(--fs-xs);background:var(--surface-3);color:var(--text);border:1px solid var(--border-2);border-radius:var(--radius-sm);padding:3px 9px;cursor:pointer;">⧉ Copy</button></div><div style="padding:var(--sp-3);font-size:var(--fs-sm);color:var(--text-dim);line-height:1.5;">"Sending Sutton + Rhodes for Okafor + Nash. You get RB depth for the playoff push, I fix my WR2. Fair on the board — lmk. 🦅"</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script="" data-props="{&quot;$preview&quot;:{&quot;width&quot;:1560,&quot;height&quot;:900},&quot;theme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;dark&quot;,&quot;light&quot;],&quot;default&quot;:&quot;dark&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Theme&quot;},&quot;navyColor&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:[&quot;#002244&quot;,&quot;#001220&quot;,&quot;#0b1e33&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Brand&quot;},&quot;greenColor&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:[&quot;#69BE28&quot;,&quot;#7fe030&quot;,&quot;#18c98a&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Brand&quot;},&quot;greyColor&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:[&quot;#A5ACAF&quot;,&quot;#9fb2c6&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Brand&quot;},&quot;baseFont&quot;:{&quot;editor&quot;:&quot;range&quot;,&quot;default&quot;:13,&quot;min&quot;:11,&quot;max&quot;:16,&quot;step&quot;:1,&quot;unit&quot;:&quot;px&quot;,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;Density&quot;},&quot;density&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;Compact&quot;,&quot;Cozy&quot;,&quot;Roomy&quot;],&quot;default&quot;:&quot;Compact&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Density&quot;},&quot;radius&quot;:{&quot;editor&quot;:&quot;range&quot;,&quot;default&quot;:6,&quot;min&quot;:0,&quot;max&quot;:14,&quot;step&quot;:1,&quot;unit&quot;:&quot;px&quot;,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;Density&quot;}}">
+class Component extends DCLogic {
+  state = { hoverCell:null };
+  componentDidMount(){ this.applyTokens(); }
+  componentDidUpdate(){ this.applyTokens(); }
+  componentWillUnmount(){ clearTimeout(this._ht); }
+  hoverIn(key){ clearTimeout(this._ht); this._ht=setTimeout(()=>this.setState({hoverCell:key}),120); }
+  hoverOut(){ clearTimeout(this._ht); if(this.state.hoverCell!==null) this.setState({hoverCell:null}); }
+  applyTokens(){
+    const r = document.documentElement; const p = this.props || {};
+    r.setAttribute('data-theme', p.theme || 'dark');
+    const set = (k,v)=>{ if(v!=null && v!=='') r.style.setProperty(k,v); };
+    const hex = v => Array.isArray(v) ? v[0] : v;
+    set('--navy', hex(p.navyColor)); set('--green', hex(p.greenColor)); set('--grey', hex(p.greyColor));
+    if(p.baseFont) set('--fs-base', p.baseFont+'px');
+    if(p.radius!=null) set('--radius', p.radius+'px');
+    if(p.density){
+      const s = p.density==='Cozy'?1.35 : p.density==='Roomy'?1.7 : 1;
+      set('--sp-1',(4*s)+'px'); set('--sp-2',(8*s)+'px'); set('--sp-3',(12*s)+'px');
+      set('--sp-4',(16*s)+'px'); set('--sp-5',(20*s)+'px'); set('--sp-6',(24*s)+'px');
+      set('--row-h',(32*s)+'px'); set('--nav-h',(48*s)+'px');
+    }
+  }
+
+  // ---------- mascots ----------
+  hawkHead(size){
+    const S = React.createElement;
+    return S('svg',{width:size,height:size,viewBox:'0 0 64 64',fill:'none',key:'hh'},
+      S('path',{d:'M12 30 Q10 12 30 10 Q52 8 54 26 Q56 40 44 50 Q34 58 22 52 Q10 46 12 30 Z',fill:'var(--navy)',stroke:'var(--green)','strokeWidth':2}),
+      S('path',{d:'M30 10 L20 2 L26 12 Z M40 9 L34 0 L44 10 Z M49 13 L48 3 L54 14 Z',fill:'var(--green)'}),
+      S('path',{d:'M18 24 L34 26 L20 32 Z',fill:'#0a1826'}),
+      S('circle',{cx:26,cy:29,r:6,fill:'#fff'}),
+      S('circle',{cx:27,cy:29,r:3,fill:'#0a1826'}),
+      S('circle',{cx:26,cy:28,r:1,fill:'#fff'}),
+      S('path',{d:'M8 30 L20 27 L18 33 Z',fill:'var(--gold)'}),
+      S('path',{d:'M8 30 L18 33 L16 37 Z',fill:'#b8860b'})
+    );
+  }
+  heroMascotSvg(){
+    const S = React.createElement;
+    return S('svg',{width:210,height:180,viewBox:'0 0 210 180',fill:'none',key:'hero'},
+      // ground shadow
+      S('ellipse',{cx:105,cy:166,rx:92,ry:11,fill:'#000',opacity:.28}),
+      // dazed ram (behind, toppled)
+      S('g',{opacity:.95},
+        S('ellipse',{cx:52,cy:150,rx:34,ry:16,fill:'#8b93a0'}),
+        S('circle',{cx:40,cy:146,r:15,fill:'#aab2bd'}),
+        // bent horns
+        S('path',{d:'M30 140 Q18 132 22 146 Q26 156 34 150',stroke:'#5f6874','strokeWidth':5,fill:'none','strokeLinecap':'round'}),
+        S('path',{d:'M50 138 Q60 128 54 142',stroke:'#5f6874','strokeWidth':5,fill:'none','strokeLinecap':'round'}),
+        // spiral daze eyes
+        S('circle',{cx:36,cy:145,r:3.4,fill:'#fff'}),S('circle',{cx:36,cy:145,r:1.4,fill:'#0a1826'}),
+        S('circle',{cx:45,cy:145,r:3.4,fill:'#fff'}),S('path',{d:'M45 143.5 a1.5 1.5 0 1 1 -1.4 1.9',stroke:'#0a1826','strokeWidth':1,fill:'none'}),
+        S('path',{d:'M26 150 l-6 4 M24 145 l-7 1',stroke:'#5f6874','strokeWidth':1.4})
+      ),
+      // defeated miner (right, hat rolling away)
+      S('g',null,
+        S('circle',{cx:172,cy:152,r:13,fill:'#c98a5a'}),
+        S('path',{d:'M162 158 q10 8 20 0',stroke:'#7a4a26','strokeWidth':2,fill:'none'}),
+        S('circle',{cx:167,cy:150,r:1.5,fill:'#3a2414'}),S('circle',{cx:177,cy:150,r:1.5,fill:'#3a2414'}),
+        // rolling gold-rush hat
+        S('ellipse',{cx:196,cy:162,rx:13,ry:6,fill:'#d4a017'}),
+        S('path',{d:'M188 162 q8 -14 16 0 Z',fill:'#e0b23a'}),
+        S('path',{d:'M198 156 l6 -6 M200 160 l7 -3',stroke:'#d4a017','strokeWidth':1.4}),
+        // broken pickaxe
+        S('rect',{x:150,y:120,width:4,height:22,rx:2,fill:'#6b4a2b',transform:'rotate(30 152 130)'}),
+        S('path',{d:'M138 118 q10 -6 18 2',stroke:'#9aa2ac','strokeWidth':4,fill:'none','strokeLinecap':'round'})
+      ),
+      // HAWK — swaggering, dominating, front & center
+      S('g',null,
+        // tail
+        S('path',{d:'M118 150 L150 120 L152 138 L138 150 Z',fill:'var(--navy)',stroke:'var(--green)','strokeWidth':2}),
+        // body
+        S('path',{d:'M78 60 Q118 52 122 100 Q124 138 96 148 Q66 152 60 118 Q56 82 78 60 Z',fill:'var(--navy)',stroke:'var(--green)','strokeWidth':2.5}),
+        // wing flexed
+        S('path',{d:'M96 78 Q132 82 128 118 Q112 112 100 96 Z',fill:'#0a2a49',stroke:'var(--green)','strokeWidth':1.5}),
+        S('path',{d:'M104 92 L126 100 M102 102 L124 112',stroke:'var(--green)','strokeWidth':1.5,opacity:.5}),
+        // chest feathers
+        S('path',{d:'M74 96 l8 6 8 -6 M74 108 l8 6 8 -6 M74 120 l8 6 8 -6',stroke:'var(--green)','strokeWidth':1.4,fill:'none',opacity:.55}),
+        // leg / talon on ram
+        S('path',{d:'M84 146 L80 158 M80 158 l-5 3 M80 158 l5 3 M80 158 l0 5',stroke:'var(--gold)','strokeWidth':3,'strokeLinecap':'round'}),
+        // head
+        S('path',{d:'M70 40 Q100 30 108 54 Q112 72 90 78 Q66 80 62 58 Q60 46 70 40 Z',fill:'var(--navy)',stroke:'var(--green)','strokeWidth':2.5}),
+        // crest feathers
+        S('path',{d:'M78 34 L70 20 L82 32 Z M90 32 L86 16 L98 30 Z M100 36 L102 22 L108 36 Z',fill:'var(--green)'}),
+        // brow (angry)
+        S('path',{d:'M70 52 L92 48 L90 56 Z',fill:'#0a1826'}),
+        // eye
+        S('circle',{cx:82,cy:56,r:7,fill:'#fff'}),
+        S('circle',{cx:84,cy:56,r:3.5,fill:'#0a1826'}),
+        S('circle',{cx:82.5,cy:54.5,r:1.2,fill:'#fff'}),
+        // beak
+        S('path',{d:'M60 58 L100 60 L96 70 Z',fill:'var(--gold)'}),
+        S('path',{d:'M60 58 L96 70 L92 76 Z',fill:'#b8860b'})
+      )
+    );
+  }
+  victoryMascot(size){
+    const S = React.createElement;
+    return S('svg',{width:size,height:size,viewBox:'0 0 64 64',fill:'none',key:'vic'},
+      S('path',{d:'M14 30 Q12 12 32 10 Q52 8 52 28 Q52 44 38 50 Q22 54 16 40 Q13 35 14 30 Z',fill:'var(--navy)',stroke:'var(--green)','strokeWidth':2}),
+      S('path',{d:'M28 10 L20 -1 L30 9 Z M40 9 L36 -2 L46 9 Z',fill:'var(--green)'}),
+      S('circle',{cx:28,cy:28,r:6,fill:'#fff'}),S('circle',{cx:29,cy:28,r:3,fill:'#0a1826'}),
+      S('path',{d:'M10 30 L24 27 L22 33 Z',fill:'var(--gold)'}),
+      // trophy
+      S('path',{d:'M40 40 h12 v4 a6 6 0 0 1 -12 0 Z',fill:'var(--gold)'}),
+      S('rect',{x:44,y:48,width:4,height:5,fill:'var(--gold)'}),
+      S('rect',{x:40,y:53,width:12,height:3,rx:1,fill:'#b8860b'}),
+      S('path',{d:'M38 38 l4 -3 M54 38 l-4 -3',stroke:'var(--green)','strokeWidth':2})
+    );
+  }
+  emptyMascot(size){
+    const S = React.createElement;
+    return S('svg',{width:size,height:size,viewBox:'0 0 96 96',fill:'none',key:'emp'},
+      S('ellipse',{cx:48,cy:86,rx:30,ry:5,fill:'#000',opacity:.18}),
+      S('path',{d:'M30 40 Q28 20 50 18 Q72 16 72 40 Q72 60 54 68 Q34 72 30 50 Z',fill:'var(--surface-3)',stroke:'var(--border-2)','strokeWidth':2}),
+      S('path',{d:'M44 18 L36 6 L48 16 Z M58 17 L54 4 L64 16 Z',fill:'var(--border-2)'}),
+      S('circle',{cx:46,cy:38,r:6,fill:'#fff'}),S('circle',{cx:46,cy:39,r:2.6,fill:'var(--text-mute)'}),
+      S('path',{d:'M42 48 q6 4 12 0',stroke:'var(--text-mute)','strokeWidth':2,fill:'none'}),
+      S('path',{d:'M28 44 L14 40 L18 50 Z',fill:'var(--grey)'}),
+      // shrug clipboard
+      S('rect',{x:54,y:56,width:26,height:32,rx:3,fill:'var(--surface-2)',stroke:'var(--border-2)','strokeWidth':2}),
+      S('rect',{x:62,y:52,width:10,height:6,rx:2,fill:'var(--border-2)'}),
+      S('path',{d:'M60 66 h14 M60 72 h14 M60 78 h8',stroke:'var(--text-mute)','strokeWidth':2})
+    );
+  }
+
+  // ---------- draft board ----------
+  buildBoard(){
+    const N=12, ROUNDS=15, onClock=40, myCol=3;
+    const first=['Jaylen','Marcus','Tyrell','Deon','Cade','Bryce','Amari','Zion','Trey','Malik','Xavier','Rome','Jaxon','Keon','Devon','Nico','Rashid','Elijah','Cam','Isiah','Quentin','Dante','Roman','Silas','Otis','Enzo','Kai','Dax'];
+    const last=['Boyd','Reeve','Vance','Hartley','Whitlock','Mercer','Okafor','Bishop','Sutton','Falk','Rhodes','Pace','Vega','Nash','Kemp','Ayers','Reyes','Stark','Poole','Frost','Cross','Dunn','Marsh','Wren','Colt','Ives','Hale','Roan'];
+    const nfl=['SEA','SF','DAL','PHI','GB','DET','KC','BUF','MIA','CIN','BAL','HOU','LAR','ARI','MIN','TB','NYJ','LV','CHI','ATL','NO','WAS','PIT','CLE'];
+    const posSeq=['RB','WR','WR','RB','WR','QB','TE','RB','WR','RB','WR','QB','WR','TE','RB','WR','RB','QB','WR','TE','RB','WR','QB','TE','RB','WR','K','DST'];
+    const traded = new Set(['1-5','3-8','6-3']);
+    const rows=[];
+    for(let r=0;r<ROUNDS;r++){
+      const cells=[];
+      for(let c=0;c<N;c++){
+        const pickNo = r%2===0 ? r*N+c+1 : r*N+(N-1-c)+1;
+        const pos = posSeq[(pickNo-1)%posSeq.length];
+        const name = first[(pickNo*3)%first.length]+' '+last[(pickNo*5+r)%last.length];
+        const team = nfl[(pickNo*7)%nfl.length];
+        let state = pickNo<onClock?'filled':(pickNo===onClock?'clock':'empty');
+        const isEmpty=state==='empty', isClock=state==='clock', mine=(c===myCol)&&!isEmpty, isTraded=traded.has(r+'-'+c);
+        cells.push({
+          key:r+'-'+c, pickNo, pos, name, team, col:c, rIdx:r,
+          color: isEmpty ? 'var(--border)' : 'var(--pos-'+pos.toLowerCase()+')',
+          state, isEmpty, isClock, isFilled:state==='filled', mine, traded:isTraded, teamNo:c+1,
+          pts: (280 - pickNo*1.35 + ((pickNo*7)%11)).toFixed(1),
+          adp: (pickNo + ((pickNo*3)%5) - 2 + 0.1*((pickNo*7)%10)).toFixed(1),
+          tier: Math.ceil(pickNo/12),
+          bg: isClock?'rgba(105,190,40,.12)':(isEmpty?'transparent':'var(--surface-2)'),
+          border: (isClock||mine)?'1.5px solid var(--green)':(isEmpty?'1px dashed var(--border-2)':'1px solid var(--border)')
+        });
+      }
+      rows.push({ key:'r'+r, round:r+1, dir: r%2===0?'ltr':'rtl', arrow: r%2===0?'→':'←', cells });
+    }
+    return rows;
+  }
+
+  buildPlayers(P){
+    const TAG={
+      green:{fg:'var(--green)',bg:'rgba(105,190,40,.14)',bd:'rgba(105,190,40,.5)'},
+      blue:{fg:'var(--info)',bg:'rgba(74,168,255,.14)',bd:'rgba(74,168,255,.5)'},
+      red:{fg:'var(--loss)',bg:'rgba(255,92,108,.14)',bd:'rgba(255,92,108,.5)'},
+    };
+    const raw=[
+      {name:'Marcus Reeve',team:'SEA',pos:'WR',adp:'6.4',ecr:'5',tier:'1',pts:'284.5',tags:[{t:'My Guy',c:'green'}]},
+      {name:'Trey Sutton',team:'DET',pos:'RB',adp:'8.1',ecr:'9',tier:'2',pts:'271.2',tags:[{t:'Sleeper',c:'blue'}]},
+      {name:'Jaylen Boyd',team:'BUF',pos:'QB',adp:'22.7',ecr:'18',tier:'2',pts:'392.0',tags:[]},
+      {name:'Amari Okafor',team:'MIA',pos:'WR',adp:'14.9',ecr:'16',tier:'2',pts:'248.7',tags:[{t:'My Guy',c:'green'}]},
+      {name:'Zion Falk',team:'KC',pos:'TE',adp:'31.4',ecr:'28',tier:'3',pts:'188.3',tags:[{t:'Avoid',c:'red'}]},
+      {name:'Cade Rhodes',team:'GB',pos:'RB',adp:'19.2',ecr:'21',tier:'3',pts:'233.6',tags:[{t:'Sleeper',c:'blue'}]},
+      {name:'Deon Vega',team:'PHI',pos:'WR',adp:'27.5',ecr:'24',tier:'3',pts:'219.9',tags:[]},
+      {name:'Bryce Nash',team:'CIN',pos:'RB',adp:'11.0',ecr:'12',tier:'2',pts:'256.1',tags:[{t:'My Guy',c:'green'}]},
+    ];
+    return raw.map(p=>({...p, color:P[p.pos], tags:p.tags.map(t=>({t:t.t,...TAG[t.c]}))}));
+  }
+
+  _roster(arr, tint){
+    const T = tint==='green'
+      ? {bg:'rgba(105,190,40,.1)',bd:'rgba(105,190,40,.45)'}
+      : {bg:'rgba(74,168,255,.1)',bd:'rgba(74,168,255,.45)'};
+    return arr.map(p=>({...p, unsel:!p.sel, rowBg:p.sel?T.bg:'var(--surface-2)', rowBd:p.sel?T.bd:'var(--border)'}));
+  }
+
+  renderVals(){
+    const P = {QB:'var(--pos-qb)',RB:'var(--pos-rb)',WR:'var(--pos-wr)',TE:'var(--pos-te)',K:'var(--pos-k)',DST:'var(--pos-dst)'};
+    const _board = this.buildBoard();
+    const _tn = ['Cascadia','12s Reign','Rain City','HAWK MODE','Boom Squad','Emerald Elite','Ghost Rams','Sound FX','Pike Place','Rainier Reign','Sea Hawkers','Blitz Bros'];
+    const _flat=[]; _board.forEach(r=>r.cells.forEach(c=>{ if(c.isFilled) _flat.push(c); }));
+    _flat.sort((a,b)=>b.pickNo-a.pickNo);
+    const _ticker = _flat.slice(0,12).map(c=>({...c, byTeam:_tn[c.col]}));
+    const hv = this.state.hoverCell;
+    const enter=(k)=>()=>this.hoverIn(k), leave=()=>this.hoverOut();
+    const board = _board.map(r=>({...r, cells:r.cells.map(c=>{
+      const on = c.key===hv;
+      // keep the pop-out inside the scroll viewport at the edges
+      const tx = c.col<=1?34 : c.col===2?16 : c.col>=10?-34 : c.col===9?-16 : 0;
+      const ty = c.rIdx===0?26 : c.rIdx>=13?-22 : 0;
+      return {...c,
+        expanded:on,
+        onEnter: c.isFilled?enter(c.key):null,
+        onLeave: c.isFilled?leave:null,
+        cellZ: on?80:'auto',
+        cellTf: on?'scale(1.08)':'scale(1)',
+        byTeam:_tn[c.col],
+        bubbleOp: on?1:0,
+        bubblePe: on?'auto':'none',
+        bubbleTf: on
+          ? 'translate(calc(-50% + '+tx+'px), calc(-50% + '+ty+'px)) scale(1)'
+          : 'translate(calc(-50% + '+tx+'px), calc(-50% + '+ty+'px)) scale(.7)',
+      };
+    })}));
+    return {
+      ticker:_ticker,
+      heroMascot: this.heroMascotSvg(),
+      hawkBadge: this.hawkHead(28),
+      hawkBadgeSm: this.hawkHead(18),
+      hawkLogo: this.hawkHead(30),
+      victoryMascot: this.victoryMascot(52),
+      emptyMascot: this.emptyMascot(96),
+      brandTokens:[
+        {name:'College Navy', hex:'#002244', var:'--navy'},
+        {name:'Action Green', hex:'#69BE28', var:'--green'},
+        {name:'Wolf Grey', hex:'#A5ACAF', var:'--grey'},
+      ],
+      positions:[
+        {key:'QB',color:P.QB},{key:'RB',color:P.RB},{key:'WR',color:P.WR},
+        {key:'TE',color:P.TE},{key:'K',color:P.K},{key:'DST',color:P.DST},
+      ],
+      posColors:P,
+      spaceTokens:[
+        {var:'--sp-1',px:'4px'},{var:'--sp-2',px:'8px'},{var:'--sp-3',px:'12px'},{var:'--sp-4',px:'16px'},
+      ],
+      teamHeaders:['Cascadia','12s Reign','Rain City','HAWK MODE','Boom Squad','Emerald Elite','Ghost Rams','Sound FX','Pike Place','Rainier Reign','Sea Hawkers','Blitz Bros'].map((n,i)=>({name:n,mine:i===3,no:i+1,bg:i===3?'rgba(105,190,40,.16)':'transparent',fg:i===3?'var(--green)':'var(--text-dim)'})),
+      board: board,
+
+      // player table
+      players: this.buildPlayers(P),
+
+      // monte carlo
+      mcTiles:[
+        {pos:'RB',pts:'212.4',delta:'+4.1',up:true,down:false},{pos:'WR',pts:'238.9',delta:'+1.7',up:true,down:false},
+        {pos:'QB',pts:'301.2',delta:'2.3',up:false,down:true},{pos:'TE',pts:'146.8',delta:'+0.4',up:true,down:false},
+      ],
+      mcSuggest:{player:'Trey Sutton',pos:'RB',team:'DET',reason:'Best value on the board with an RB cliff in 4 picks — 78% chance he\u2019s gone before you\u2019re back.'},
+      mcStack:'Boyd (QB) + Reeve (WR) = live stack. +6.2% ceiling in 1,000 sims.',
+      mcHomer:[
+        {label:'Your target',player:'Amari Okafor',proj:'248.7',floor:'201',ceil:'292'},
+        {label:'Consensus pick',player:'Deon Vega',proj:'219.9',floor:'188',ceil:'254'},
+      ],
+
+      // scarcity
+      scarcity:[
+        {pos:'RB',color:P.RB,left:'2 left in Tier 2',call:'REACH',cfg:'var(--loss)',cbg:'rgba(255,92,108,.14)',cbd:'var(--loss)',atRisk:[{n:'Trey Sutton',o:22},{n:'Cade Rhodes',o:41},{n:'Bryce Nash',o:64}]},
+        {pos:'WR',color:P.WR,left:'6 left in Tier 2',call:'WAIT',cfg:'var(--win)',cbg:'rgba(105,190,40,.14)',cbd:'var(--win)',atRisk:[{n:'Amari Okafor',o:71},{n:'Deon Vega',o:83}]},
+        {pos:'TE',color:P.TE,left:'1 elite left',call:'TOSS-UP',cfg:'var(--warn)',cbg:'rgba(245,179,1,.14)',cbd:'var(--warn)',atRisk:[{n:'Zion Falk',o:38},{n:'Rome Pace',o:55}]},
+      ],
+
+      // in-season
+      leagues:['Dynasty Warlords','Home League 12','Best Ball Mania','Guillotine'],
+      teams:['HAWK MODE','My Second Squad'],
+      lineup:[
+        {slot:'QB',cur:'J. Boyd',opt:'J. Boyd',delta:'0.0',ok:true,change:false},
+        {slot:'RB',cur:'T. Sutton',opt:'T. Sutton',delta:'0.0',ok:true,change:false},
+        {slot:'RB',cur:'C. Rhodes',opt:'B. Nash',delta:'+3.8',ok:false,change:true},
+        {slot:'WR',cur:'M. Reeve',opt:'M. Reeve',delta:'0.0',ok:true,change:false},
+        {slot:'WR',cur:'D. Vega',opt:'A. Okafor',delta:'+2.1',ok:false,change:true},
+        {slot:'TE',cur:'Z. Falk',opt:'Z. Falk',delta:'0.0',ok:true,change:false},
+        {slot:'FLEX',cur:'K. Kemp',opt:'K. Kemp',delta:'0.0',ok:true,change:false},
+      ],
+      matchups:[
+        {opp:'vs Boom Squad',str:'Favorable',cfg:'var(--win)',cbg:'rgba(105,190,40,.14)',cbd:'var(--win)',conf:'High'},
+        {opp:'vs Ghost Rams',str:'Even',cfg:'var(--warn)',cbg:'rgba(245,179,1,.14)',cbd:'var(--warn)',conf:'Med'},
+        {opp:'@ Sound FX',str:'Tough',cfg:'var(--loss)',cbg:'rgba(255,92,108,.14)',cbd:'var(--loss)',conf:'High'},
+      ],
+      streaming:[
+        {pos:'DST',color:P.DST,name:'Seattle D/ST',reason:'vs turnover-prone rookie QB',pts:'+9.2'},
+        {pos:'QB',color:P.QB,name:'Roman Cross',reason:'top-3 pass funnel matchup',pts:'+4.6'},
+        {pos:'TE',color:P.TE,name:'Otis Wren',reason:'27% target share w/ WR1 out',pts:'+3.1'},
+      ],
+      usage:[
+        {p:'T. Sutton',snap:'82%',tgt:'14%',arr:'▲',tc:'var(--win)'},
+        {p:'C. Rhodes',snap:'54%',tgt:'9%',arr:'▼',tc:'var(--loss)'},
+        {p:'M. Reeve',snap:'91%',tgt:'29%',arr:'▲',tc:'var(--win)'},
+        {p:'K. Kemp',snap:'38%',tgt:'11%',arr:'▬',tc:'var(--text-mute)'},
+      ],
+      handcuffs:[
+        {starter:'T. Sutton',cuff:'D. Marsh',prio:'HIGH',pfg:'var(--loss)',pbg:'rgba(255,92,108,.14)'},
+        {starter:'B. Nash',cuff:'S. Wren',prio:'MED',pfg:'var(--warn)',pbg:'rgba(245,179,1,.14)'},
+        {starter:'C. Rhodes',cuff:'—',prio:'NONE',pfg:'var(--text-mute)',pbg:'var(--surface-3)'},
+      ],
+      sos:[
+        {team:'SEA',wk:[{v:'Easy',c:'var(--win)'},{v:'Med',c:'var(--warn)'},{v:'Easy',c:'var(--win)'}]},
+        {team:'DET',wk:[{v:'Hard',c:'var(--loss)'},{v:'Easy',c:'var(--win)'},{v:'Med',c:'var(--warn)'}]},
+        {team:'BUF',wk:[{v:'Med',c:'var(--warn)'},{v:'Hard',c:'var(--loss)'},{v:'Easy',c:'var(--win)'}]},
+      ],
+      notifs:[
+        {t:'Trade offer from Ghost Rams',m:'2m ago',dot:'var(--green)'},
+        {t:'M. Reeve questionable (ankle)',m:'40m ago',dot:'var(--loss)'},
+        {t:'Waiver claim processed: D. Marsh',m:'3h ago',dot:'var(--border-2)'},
+      ],
+
+      // trade room
+      myRoster: this._roster([
+        {n:'Marcus Reeve',pos:'WR',color:P.WR,val:41,sel:false},{n:'Trey Sutton',pos:'RB',color:P.RB,val:38,sel:true},
+        {n:'Cade Rhodes',pos:'RB',color:P.RB,val:22,sel:true},{n:'Zion Falk',pos:'TE',color:P.TE,val:14,sel:false},
+        {n:'Kai Kemp',pos:'WR',color:P.WR,val:11,sel:false},
+      ],'green'),
+      theirRoster: this._roster([
+        {n:'Jaylen Boyd',pos:'QB',color:P.QB,val:36,sel:false},{n:'Amari Okafor',pos:'WR',color:P.WR,val:33,sel:true},
+        {n:'Bryce Nash',pos:'RB',color:P.RB,val:29,sel:true},{n:'Deon Vega',pos:'WR',color:P.WR,val:18,sel:false},
+        {n:'Otis Wren',pos:'TE',color:P.TE,val:9,sel:false},
+      ],'blue'),
+      tradeVerdict:{
+        title:'SLIGHT WIN — TAKE IT',
+        line:'You give up 63 in value and get back 69. The RB depth you send is replaceable; Okafor upgrades your WR2 fit by a full tier.',
+        mine:63, theirs:69, gap:'+6', fit:[
+          {label:'WR fit',delta:'+1 tier',icon:'▲',fg:'var(--win)',bg:'rgba(105,190,40,.14)',bd:'rgba(105,190,40,.5)'},
+          {label:'RB depth',delta:'-1 body',icon:'▼',fg:'var(--loss)',bg:'rgba(255,92,108,.14)',bd:'rgba(255,92,108,.5)'},
+          {label:'Bye overlap',delta:'clean',icon:'✓',fg:'var(--grey)',bg:'var(--surface-3)',bd:'var(--border-2)'},
+        ]
+      },
+      counters:[
+        {give:'Sutton + Falk',get:'Okafor + Nash',note:'evens RB loss',fair:'Fair',ffg:'var(--text-dim)',fbg:'var(--surface-3)'},
+        {give:'Reeve',get:'Boyd + Vega',note:'sell WR high',fair:'You Win',ffg:'var(--win)',fbg:'rgba(105,190,40,.14)'},
+      ],
+    };
+  }
+}
+</script>
+
+
+</body></html>

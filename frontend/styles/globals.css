@@ -195,3 +195,13 @@ body {
 .hawk-scroll::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/* Trade Room composite body: two columns on desktop, stacked narrow */
+.trade-room-body {
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+}
+@media (max-width: 900px) {
+  .trade-room-body {
+    grid-template-columns: 1fr;
+  }
+}

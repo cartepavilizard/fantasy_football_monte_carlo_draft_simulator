@@ -31,6 +31,8 @@ import {
 } from "@/api/services/league";
 import { useLazyGetScarcityQuery } from "@/api/services/scarcity";
 import { title, subtitle } from "@/components/primitives";
+import { DraftBoard } from "@/components/draft-board";
+import { VictoryBadge } from "@/components/mascots";
 import {
   Draft,
   HomerCheck,
@@ -538,9 +540,37 @@ export default function DraftIdPage({ params }: { params: { id: string } }) {
                   </span>
                 </p>
               ) : monteCarloResults.iterations > 0 ? (
-                <div className="flex justify-between">
-                  <p>Best Pick: {bestPick}</p>
-                  <p>{`${monteCarloResults.iterations} Iterations Performed`}</p>
+                <div className="flex flex-col gap-2 w-full">
+                  <div className="flex justify-between">
+                    <p>Best Pick: {bestPick}</p>
+                    <p>{`${monteCarloResults.iterations} Iterations Performed`}</p>
+                  </div>
+                  {/* HAWK MODE suggested-pick panel — victory mascot + the
+                      engine's headline pick on a green-tinted navy cutout */}
+                  {bestPick && bestPick !== "Simulation Error" && (
+                    <div
+                      className="relative overflow-hidden flex items-center gap-3"
+                      style={{
+                        background:
+                          "linear-gradient(120deg, rgba(105,190,40,0.16), transparent 70%), var(--navy)",
+                        border: "1px solid var(--green)",
+                        borderRadius: "var(--radius)",
+                        padding: "var(--sp-3)",
+                      }}
+                    >
+                      <div className="shrink-0">
+                        <VictoryBadge size={48} />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="font-head text-xs font-bold uppercase tracking-[0.08em] text-green">
+                          Suggested Pick
+                        </div>
+                        <div className="font-head text-lg font-bold uppercase text-white">
+                          {bestPick}
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <p className="font-bold w-full">Not Simulating...</p>
@@ -674,16 +704,19 @@ export default function DraftIdPage({ params }: { params: { id: string } }) {
           ))}
         </div>
 
-        {/* Use a flex box to display columns of the six positions */}
-        <div className="text-center grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2 w-full">
-          {positions.map((position) => (
-            <div
-              key={position}
-              className="col-span-1 flex flex-col items-center gap-4"
-            >
-              <h3 className="text-lg font-bold mt-0 w-full">
-                {position.toLocaleUpperCase()}
-              </h3>
+        {/* HAWK MODE draft board — BOARD/LIST toggle. LIST renders the
+            existing six-position player columns unchanged; BOARD renders
+            the snake grid centerpiece. */}
+        <DraftBoard league={draft.league}>
+          <div className="text-center grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2 w-full">
+            {positions.map((position) => (
+              <div
+                key={position}
+                className="col-span-1 flex flex-col items-center gap-4"
+              >
+                <h3 className="text-lg font-bold mt-0 w-full">
+                  {position.toLocaleUpperCase()}
+                </h3>
               <ul className="flex flex-col gap-4 w-full">
                 {(filteredPlayers ?? draft.league.players)[
                   position as keyof Players
@@ -771,6 +804,7 @@ export default function DraftIdPage({ params }: { params: { id: string } }) {
             </div>
           ))}
         </div>
+        </DraftBoard>
       </DraftIdContext.Provider>
     </section>
   );

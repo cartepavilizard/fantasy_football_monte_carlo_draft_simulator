@@ -53,6 +53,7 @@ import {
 } from "@/api/services/inseason";
 import { title, subtitle } from "@/components/primitives";
 import { VarianceFlag } from "@/components/variance-flag";
+import { EmptyStateHawk } from "@/components/mascots";
 import {
   DeadlineReport,
   GrokParsePreview,
@@ -963,10 +964,13 @@ function AntiCorrelationRow({
         {overviewLoading ? (
           <Spinner />
         ) : leagues.length === 0 ? (
-          <p className="text-sm text-default-500">
-            No leagues synced yet. Use &quot;Sync now&quot; below to pull your
-            configured ESPN leagues.
-          </p>
+          <div className="flex flex-col items-center gap-2 text-center">
+            <EmptyStateHawk size={72} />
+            <p className="text-sm text-default-500">
+              No leagues synced yet. Use &quot;Sync now&quot; below to pull
+              your configured ESPN leagues.
+            </p>
+          </div>
         ) : (
           <div className="flex flex-wrap items-center gap-4">
             <label className="flex flex-col gap-1 text-sm">
@@ -1085,11 +1089,14 @@ function AntiCorrelationRow({
         {usageShiftsQuery.isLoading || !usageShiftsQuery.data ? (
           <Spinner />
         ) : usageShiftsQuery.data.shifts.length === 0 ? (
-          <p className="text-sm text-default-500">
-            No meaningful usage shifts for week {usageWeek} yet — either
-            usage data hasn&apos;t synced, or no role changed enough to
-            clear the noise floor.
-          </p>
+          <div className="flex flex-col items-center gap-2 py-2 text-center">
+            <EmptyStateHawk size={64} />
+            <p className="text-sm text-default-500">
+              No meaningful usage shifts for week {usageWeek} yet — either
+              usage data hasn&apos;t synced, or no role changed enough to
+              clear the noise floor.
+            </p>
+          </div>
         ) : (
           <table className="w-full text-sm">
             <thead>

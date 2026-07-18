@@ -5,7 +5,7 @@ import clsx from "clsx";
 import { Providers } from "./providers";
 
 import { siteConfig } from "@/config/site";
-import { fontSans } from "@/config/fonts";
+import { fontDisplay, fontHead, fontBody } from "@/config/fonts";
 import { Navbar } from "@/components/navbar";
 
 export const metadata: Metadata = {
@@ -21,8 +21,8 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = {
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "white" },
-    { media: "(prefers-color-scheme: dark)", color: "black" },
+    { media: "(prefers-color-scheme: light)", color: "#e7ecf1" },
+    { media: "(prefers-color-scheme: dark)", color: "#050f1a" },
   ],
 };
 
@@ -36,37 +36,33 @@ export default function RootLayout({
       <head />
       <body
         className={clsx(
-          "min-h-screen font-sans antialiased",
-          fontSans.variable,
+          "min-h-screen font-body antialiased",
+          fontDisplay.variable,
+          fontHead.variable,
+          fontBody.variable,
         )}
       >
         <Providers themeProps={{ attribute: "class", defaultTheme: "dark" }}>
+          {/* HAWK MODE background: navy gradient + faint feather watermark.
+              Light theme falls back to the kit's light surface token. */}
           <div
-            className="
-                fixed w-screen h-screen 
-                bg-cover bg-no-repeat bg-right bg-fixed
-                opacity-100 z-1 hide-on-light
-              "
+            aria-hidden
+            className="fixed inset-0 -z-10 hide-on-light"
             style={{
-              backgroundImage: "url('/football_dark.png')",
+              background:
+                "linear-gradient(120deg, var(--navy) 0%, var(--bg) 55%, var(--surface) 100%)",
             }}
-          />
+          >
+            <div className="hawk-feather" />
+          </div>
           <div
-            className="
-                fixed w-screen h-screen 
-                bg-cover bg-no-repeat bg-right bg-fixed
-                opacity-50 z-1 hide-on-dark
-              "
-            style={{
-              backgroundImage: "url('/football_light.png')",
-            }}
+            aria-hidden
+            className="fixed inset-0 -z-10 hide-on-dark"
+            style={{ backgroundColor: "var(--bg)" }}
           />
           <div className="relative flex flex-col min-h-screen">
-            {/* Background image */}
-
-            {/* Content */}
             <Navbar />
-            <main className="container relative mx-auto max-w-7xl py-16 px-6 flex-grow z-2">
+            <main className="container relative mx-auto max-w-7xl py-6 px-4 flex-grow z-2 md:py-8">
               {children}
             </main>
           </div>

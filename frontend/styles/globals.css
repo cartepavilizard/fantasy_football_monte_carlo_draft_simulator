@@ -2,10 +2,196 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ============ HAWK MODE TOKENS ============ */
+/* Dark is the default; light overrides via [data-theme="light"] (next-themes
+   sets data-theme on <html>). Values are the user-approved kit, verbatim. */
+:root {
+  --navy: #002244;
+  --green: #69be28;
+  --grey: #a5acaf;
+  --green-bright: #7fe030;
+  --gold: #d4a017;
+
+  /* dark theme (default) */
+  --bg: #050f1a;
+  --surface: #0b1e33;
+  --surface-2: #0f2740;
+  --surface-3: #143154;
+  --border: #1c3a5c;
+  --border-2: #264d78;
+  --text: #eef4fa;
+  --text-dim: #9fb2c6;
+  --text-mute: #6d8199;
+
+  /* position colors, tuned for navy */
+  --pos-qb: #ff5c6c;
+  --pos-rb: #18c98a;
+  --pos-wr: #4aa8ff;
+  --pos-te: #ff9e3d;
+  --pos-k: #b98bff;
+  --pos-dst: #c0895b;
+  --pos-flex: #69be28;
+
+  /* semantic */
+  --win: #69be28;
+  --loss: #ff5c6c;
+  --warn: #f5b301;
+  --info: #4aa8ff;
+
+  /* spacing scale (density) */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+
+  /* sizing */
+  --fs-base: 13px;
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 15px;
+  --fs-lg: 18px;
+  --fs-xl: 23px;
+  --fs-2xl: 32px;
+  --fs-display: 58px;
+  --nav-h: 48px;
+  --row-h: 32px;
+  --radius: 6px;
+  --radius-sm: 4px;
+  --radius-lg: 10px;
+
+  --font-display: "Anton", Impact, sans-serif;
+  --font-head: "Barlow Condensed", sans-serif;
+  --font-body: "Barlow", system-ui, sans-serif;
+
+  /* faint feather-chevron watermark used on navy panels */
+  --feather: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='34' height='40' viewBox='0 0 34 40'%3E%3Cpath d='M17 0 L34 12 L17 8 Z M17 0 L0 12 L17 8 Z M17 14 L34 26 L17 22 Z M17 14 L0 26 L17 22 Z M17 28 L34 40 L17 36 Z M17 28 L0 40 L17 36 Z' fill='%23ffffff' fill-opacity='0.028'/%3E%3C/svg%3E");
+}
+
+:root[data-theme="light"] {
+  --bg: #e7ecf1;
+  --surface: #ffffff;
+  --surface-2: #f3f6f9;
+  --surface-3: #e8edf2;
+  --border: #d2dae2;
+  --border-2: #bcc7d2;
+  --text: #08192b;
+  --text-dim: #4a5c6e;
+  --text-mute: #7d8c9a;
+  --navy: #002244;
+  --feather: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='34' height='40' viewBox='0 0 34 40'%3E%3Cpath d='M17 0 L34 12 L17 8 Z M17 0 L0 12 L17 8 Z M17 14 L34 26 L17 22 Z M17 14 L0 26 L17 22 Z M17 28 L34 40 L17 36 Z M17 28 L0 40 L17 36 Z' fill='%23002244' fill-opacity='0.04'/%3E%3C/svg%3E");
+}
+
 html.dark .hide-on-dark {
   display: none;
 }
 
 html.light .hide-on-light {
   display: none;
+}
+
+/* ============ BASE ============ */
+html {
+  font-size: var(--fs-base);
+}
+
+body {
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+}
+
+/* Font helpers — Anton for page-title display headings, Barlow Condensed for
+   section headings, Barlow (body) is inherited from <body>. */
+.font-display {
+  font-family: var(--font-display);
+}
+.font-head {
+  font-family: var(--font-head);
+}
+.font-body {
+  font-family: var(--font-body);
+}
+
+/* faint feather watermark layer for navy hero/panel surfaces */
+.hawk-feather {
+  position: absolute;
+  inset: 0;
+  background-image: var(--feather);
+  background-size: 34px 40px;
+  pointer-events: none;
+}
+
+/* ============ KEYFRAMES (from the kit) ============ */
+@keyframes hawkPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(105, 190, 40, 0.55),
+      inset 0 0 0 1px var(--green);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(105, 190, 40, 0),
+      inset 0 0 0 2px var(--green);
+  }
+}
+
+@keyframes glare {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: translateX(-30%);
+  }
+  50% {
+    opacity: 0.7;
+    transform: translateX(30%);
+  }
+}
+
+@keyframes eyeScan {
+  0%,
+  100% {
+    transform: translateX(-2px);
+  }
+  50% {
+    transform: translateX(2px);
+  }
+}
+
+@keyframes pop {
+  0% {
+    transform: scale(0.4);
+    opacity: 0;
+  }
+  70% {
+    transform: scale(1.15);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* the on-the-clock cell pulse — drives the centerpiece of the draft board */
+.animate-hawk-pulse {
+  animation: hawkPulse 1.4s ease-in-out infinite;
+}
+.animate-glare {
+  animation: glare 1.8s ease-in-out infinite;
+}
+.animate-eye-scan {
+  animation: eyeScan 1.2s ease-in-out infinite;
+}
+
+/* slim scrollbars to match the dense theme */
+.hawk-scroll::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+.hawk-scroll::-webkit-scrollbar-thumb {
+  background: var(--surface-3);
+  border-radius: 100px;
+}
+.hawk-scroll::-webkit-scrollbar-track {
+  background: transparent;
 }

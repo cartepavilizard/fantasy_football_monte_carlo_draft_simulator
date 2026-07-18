@@ -48,12 +48,31 @@ export type Team = {
   simulator: boolean;
 };
 
+// HAWK MODE draft board: one filled cell on the board. A new backend field
+// (an ordered array of these) — optional because old drafts predate it and
+// the board renders empty/gracefully when missing. pick_number is 0-indexed
+// to match League.current_draft_turn.
+export type PickLogEntry = {
+  pick_number: number;
+  player_name: string;
+  position: string;
+  team_index: number;
+  team_name: string;
+};
+
 // Expand the LeagueSimple type to include the teams and players
 export type League = LeagueSimple & {
   teams: Team[];
   players: Players;
   draft_order: number[];
   current_draft_turn: number;
+  // HAWK MODE: rounds per team (rows on the board). Optional — older
+  // leagues may not carry it; the board falls back to deriving rows from
+  // pick_log / draft_order length.
+  round_size?: number;
+  // HAWK MODE: ordered log of every pick made so far. Optional for the
+  // same legacy reason — an empty/missing array renders an empty board.
+  pick_log?: PickLogEntry[];
 };
 
 // Expand the DraftSimple type to include the league

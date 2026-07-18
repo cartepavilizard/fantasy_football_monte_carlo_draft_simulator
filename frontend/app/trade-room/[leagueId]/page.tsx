@@ -20,6 +20,7 @@ import {
   useLazyGetTradeMessageQuery,
 } from "@/api/services/inseason";
 import { title, subtitle } from "@/components/primitives";
+import { EmptyStateHawk } from "@/components/mascots";
 import {
   InSeasonOverviewEntry,
   LeagueTeamInfo,
@@ -497,10 +498,13 @@ export default function TradeRoomPage({
         {overviewLoading ? (
           <Spinner />
         ) : teams.length < 2 ? (
-          <p className="text-sm text-default-500">
-            This league needs at least two synced teams to build a trade. Sync
-            the league from the in-season page first.
-          </p>
+          <div className="flex flex-col items-center gap-2 text-center">
+            <EmptyStateHawk size={72} />
+            <p className="text-sm text-default-500">
+              This league needs at least two synced teams to build a trade.
+              Sync the league from the in-season page first.
+            </p>
+          </div>
         ) : (
           <div className="flex flex-wrap items-end gap-4">
             <label className="flex flex-col gap-1 text-sm">

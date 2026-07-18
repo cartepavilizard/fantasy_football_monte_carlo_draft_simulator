@@ -10,6 +10,7 @@ import {
   useMarkAllReadMutation,
   useMarkReadMutation,
 } from "@/api/services/notifications";
+import { EmptyStateHawk } from "@/components/mascots";
 import { Notification } from "@/types";
 
 function timeAgo(iso: string): string {
@@ -192,9 +193,10 @@ export function NotificationsPanel() {
                 <Spinner size="sm" />
               </div>
             ) : visible.length === 0 ? (
-              <p className="p-4 text-center text-sm text-default-500">
-                Nothing here.
-              </p>
+              <div className="flex flex-col items-center gap-2 p-4 text-center">
+                <EmptyStateHawk size={64} />
+                <p className="text-sm text-default-500">Nothing here.</p>
+              </div>
             ) : (
               <ul className="flex flex-col">
                 {visible.map((notification) => (

@@ -260,6 +260,22 @@ class LogisticRegressionVariables(EmbeddedModel):
     y: List[str] = []
 
 
+class PickLogEntry(BaseModel):
+    """
+    One completed draft pick — the durable record the draft board
+    renders. Written at pick time by add_player_to_current_draft_turn_team,
+    the single choke point through which every pick (real or simulated)
+    flows; simulated copies are discarded with their league copy, so
+    only real drafts accumulate a persisted log.
+    """
+
+    pick_number: int
+    player_name: str
+    position: str
+    team_index: int
+    team_name: str
+
+
 class LeagueSimple(BaseModel):
     """
     Just the basic information about a league, as a Pydantic model,
@@ -295,6 +311,7 @@ class League(Model):
     snake_draft: bool = SNAKE_DRAFT
     draft_order: List[int] = []
     draft_results: List[Team] = []
+    pick_log: List[PickLogEntry] = []
     current_draft_turn: int = 0
     players: Players = Players()
     position_tier_distributions: PositionTierDistributions = PositionTierDistributions()
@@ -383,6 +400,15 @@ class League(Model):
 
         # Append the player to the team's roster
         team.roster.append(player)
+        self.pick_log.append(
+            PickLogEntry(
+                pick_number=self.current_draft_turn + 1,
+                player_name=player.name,
+                position=player.position,
+                team_index=team_index,
+                team_name=team.name,
+            )
+        )
 
         # Reinitialize team, appended to draft_results, with the new player on the roster
         team_dict = team.model_dump()

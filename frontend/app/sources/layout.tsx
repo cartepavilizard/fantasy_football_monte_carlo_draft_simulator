@@ -5,7 +5,7 @@ export default function SourcesLayout({
 }) {
   return (
     <section className="flex flex-col items-center justify-center gap-4 py-8 md:py-10">
-      <div className="inline-block max-w-3xl w-full justify-center">
+      <div className="block w-full">
         {children}
       </div>
     </section>

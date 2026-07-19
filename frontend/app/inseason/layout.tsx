@@ -10,7 +10,7 @@ export default function InSeasonLayout({
   return (
     <section
       className="flex flex-col gap-4 px-3 py-6 md:px-4 md:py-8"
-      style={{ maxWidth: "var(--max-w, 1280px)", margin: "0 auto", width: "100%" }}
+      style={{ width: "100%" }}
     >
       {children}
     </section>

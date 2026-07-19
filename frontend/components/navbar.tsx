@@ -29,7 +29,7 @@ export const Navbar = () => {
       }}
     >
       <div className="hawk-feather" />
-      <div className="relative mx-auto flex h-full max-w-7xl items-center gap-3 px-4">
+      <div className="relative flex h-full w-full items-center gap-3 px-4 md:px-6">
         {/* Wordmark */}
         <Link href="/" className="relative flex items-center gap-2">
           <CornerBadge size={26} />

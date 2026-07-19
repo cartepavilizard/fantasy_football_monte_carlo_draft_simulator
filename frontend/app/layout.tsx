@@ -62,7 +62,8 @@ export default function RootLayout({
           />
           <div className="relative flex flex-col min-h-screen">
             <Navbar />
-            <main className="container relative mx-auto max-w-7xl py-6 px-4 flex-grow z-2 md:py-8">
+            {/* Full-bleed: every page uses the whole display width */}
+            <main className="relative w-full py-6 px-4 flex-grow z-2 md:py-8 md:px-6">
               {children}
             </main>
           </div>

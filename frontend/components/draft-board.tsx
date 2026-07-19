@@ -217,8 +217,10 @@ export function DraftBoard({ league, children }: DraftBoardProps) {
       {view === "list" ? (
         children
       ) : (
-        <div className="hawk-scroll overflow-x-auto">
-          <div style={{ minWidth: Math.max(520, n * 84 + 48) }}>
+        // Fit-to-width: every team column always visible, no horizontal
+        // scroll; 1fr columns shrink and cell text truncates
+        <div className="w-full">
+          <div style={{ minWidth: 0 }}>
             {/* team header row */}
             <div
               className="grid gap-1"

@@ -19,6 +19,7 @@ export type {
   HomerCheck,
   PositionScarcity,
   ScarcityCall,
+  ScarcityReport,
   PlayerAvailability,
   LineupData,
   LineupPlayer,

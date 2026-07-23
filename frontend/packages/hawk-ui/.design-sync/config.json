@@ -1,0 +1,9 @@
+{
+  "projectId": "8b6a37b1-272b-4945-b885-d5d52aa9fdfc",
+  "shape": "package",
+  "pkg": "@hawkmode/ui",
+  "cssEntry": "tokens/hawk-ui-styles.css",
+  "extraFonts": ["fonts/fonts.css"],
+  "tsconfig": "tsconfig.json",
+  "readmeHeader": ".design-sync/conventions.md"
+}

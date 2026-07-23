@@ -1,3 +1,4 @@
+import type { IconType } from "react-icons";
 import { FiMoon, FiSlash, FiStar } from "react-icons/fi";
 
 import { PlayerTag } from "./types";
@@ -10,9 +11,14 @@ import { PlayerTag } from "./types";
 // component (per-row tag/untag buttons wired to the live tag/untag
 // mutations) stays app-side in frontend/components/draft-tag-badge.tsx,
 // which re-exports tagMeta/TagBadge from here.
+//
+// Icon is typed via react-icons' own IconType (not `typeof FiMoon`) -
+// storing a component reference in a Record and rendering it later needs
+// the JSX-safe alias; `typeof FiMoon` alone fails strict .d.ts generation
+// (tsup's declaration builder is stricter here than the app's own tsc).
 export const tagMeta: Record<
   PlayerTag,
-  { Icon: typeof FiMoon; className: string; label: string }
+  { Icon: IconType; className: string; label: string }
 > = {
   sleeper: { Icon: FiMoon, className: "text-purple-500", label: "Sleeper" },
   my_guy: { Icon: FiStar, className: "text-yellow-500", label: "My Guy" },

@@ -644,7 +644,7 @@ const PickTooltip: React.FC<{
             color: "var(--text-dim)",
           }}
         >
-          {adp != null && <span>ADP {adp}</span>}
+          {adp != null && <span>ADP {adp.toFixed(1)}</span>}
           {ecr != null && <span>ECR {ecr}</span>}
           {tier != null && <span>Tier {tier}</span>}
         </div>

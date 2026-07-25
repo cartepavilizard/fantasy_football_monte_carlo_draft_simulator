@@ -42,6 +42,53 @@ function playerMetric(player: Player): string | null {
   return null;
 }
 
+// Compact colored position pill. Replaces the 5px dot so the position is
+// instantly scannable while keeping the 30px row dense. Uses the same
+// positionDotColor token for text/border plus a tinted background.
+function PositionLabel({ position }: { position: string }) {
+  const color = positionDotColor(position);
+  return (
+    <span
+      className="font-head uppercase leading-none"
+      style={{
+        color,
+        background: "color-mix(in srgb, " + color + " 14%, transparent)",
+        border: "1px solid " + color,
+        borderRadius: "var(--radius-sm)",
+        padding: "1px 5px",
+        fontSize: "var(--fs-xs)",
+        flexShrink: 0,
+      }}
+    >
+      {position.toUpperCase()}
+    </span>
+  );
+}
+
+// Default sort: best (lowest) ADP first. Missing ADP falls back to
+// consensus_rank; missing both sort LAST (never to the top). Ties broken
+// by name for stable output. Returns a new array; never mutates input.
+function sortByAdp(list: Player[]): Player[] {
+  const rank = (p: Player): number | null => {
+    if (typeof p.adp === "number" && !Number.isNaN(p.adp)) return p.adp;
+    if (typeof p.consensus_rank === "number" && !Number.isNaN(p.consensus_rank))
+      return p.consensus_rank;
+    return null;
+  };
+  return [...list].sort((a, b) => {
+    const ra = rank(a);
+    const rb = rank(b);
+    if (ra != null && rb != null) {
+      if (ra !== rb) return ra - rb;
+    } else if (ra != null && rb == null) {
+      return -1;
+    } else if (ra == null && rb != null) {
+      return 1;
+    }
+    return a.name.localeCompare(b.name);
+  });
+}
+
 export interface BestAvailableProps {
   // Already flattened across positions, tag-filtered, and drafted-excluded
   // — the connected wrapper owns that query/derivation.
@@ -70,13 +117,23 @@ export function BestAvailable({
   onDraft,
   renderTagControls,
 }: BestAvailableProps) {
+  const [positionFilter, setPositionFilter] = React.useState<string | null>(
+    null,
+  );
+
   const visible = React.useMemo(() => {
     const q = searchFilter.trim().toLowerCase();
-    if (q.length === 0) return players;
-    return players.filter((player) =>
-      player.name.toLowerCase().includes(q),
-    );
-  }, [players, searchFilter]);
+    let out = players;
+    if (q.length > 0) {
+      out = out.filter((player) => player.name.toLowerCase().includes(q));
+    }
+    if (positionFilter != null) {
+      out = out.filter(
+        (player) => player.position.toLowerCase() === positionFilter,
+      );
+    }
+    return sortByAdp(out);
+  }, [players, searchFilter, positionFilter]);
 
   return (
     <HawkCard
@@ -106,6 +163,59 @@ export function BestAvailable({
           onChange={(e) => setSearchFilter(e.target.value)}
           className="w-full bg-transparent border-none outline-none font-body text-sm text-[color:var(--text)]"
         />
+      </div>
+
+      {/* Quick position filter — one button per position, colored with
+          each position's token. Toggle: click to filter, click again (or
+          ALL) to clear. Client-side over the `players` prop only. */}
+      <div
+        className="flex flex-wrap items-center gap-1 px-3 py-2"
+        style={{ borderBottom: "1px solid var(--border)" }}
+      >
+        <button
+          type="button"
+          onClick={() => setPositionFilter(null)}
+          className="font-head text-[10px] font-bold uppercase tracking-[0.04em]"
+          style={{
+            color: positionFilter == null ? "#04240a" : "var(--text-dim)",
+            background:
+              positionFilter == null ? "var(--green)" : "var(--surface-3)",
+            border: "1px solid",
+            borderColor:
+              positionFilter == null ? "var(--green)" : "var(--border-2)",
+            borderRadius: 100,
+            padding: "2px 8px",
+            cursor: "pointer",
+          }}
+        >
+          ALL
+        </button>
+        {positions.map((pos) => {
+          const active = positionFilter === pos;
+          const color = positionDotColor(pos);
+          return (
+            <button
+              key={pos}
+              type="button"
+              onClick={() =>
+                setPositionFilter((prev) => (prev === pos ? null : pos))
+              }
+              className="font-head text-[10px] font-bold uppercase tracking-[0.04em]"
+              style={{
+                color: active ? "#04240a" : color,
+                background: active
+                  ? color
+                  : "color-mix(in srgb, " + color + " 14%, transparent)",
+                border: "1px solid " + color,
+                borderRadius: 100,
+                padding: "2px 8px",
+                cursor: "pointer",
+              }}
+            >
+              {pos.toUpperCase()}
+            </button>
+          );
+        })}
       </div>
 
       {/* All/Sleepers/My Guys/Avoids chips — the original page's tag
@@ -172,15 +282,7 @@ export function BestAvailable({
                 }}
               >
                 <span className="flex min-w-0 items-center gap-1">
-                  <span
-                    style={{
-                      width: 5,
-                      height: 5,
-                      borderRadius: "50%",
-                      flexShrink: 0,
-                      background: positionDotColor(player.position),
-                    }}
-                  />
+                  <PositionLabel position={player.position} />
                   <TagBadge tag={player.tag} />
                   <span
                     className="truncate"

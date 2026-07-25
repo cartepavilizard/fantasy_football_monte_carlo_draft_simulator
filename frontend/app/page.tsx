@@ -1,3 +1,4 @@
+import Image from "next/image";
 import { Link } from "@nextui-org/link";
 import { Snippet } from "@nextui-org/snippet";
 import { Code } from "@nextui-org/code";
@@ -5,7 +6,6 @@ import clsx from "clsx";
 
 import { fontMono } from "@/config/fonts";
 import { title, subtitle } from "@/components/primitives";
-import { HeroMascot } from "@/components/mascots";
 
 export default function Home() {
   return (
@@ -34,7 +34,23 @@ export default function Home() {
         />
         <div className="relative flex flex-wrap items-center gap-5">
           <div className="shrink-0">
-            <HeroMascot size={180} />
+            {/* The mascot art is a full rectangular scene (field, confetti),
+                not a transparent cutout, so it's framed deliberately in the
+                kit's green border treatment rather than floated on the navy.
+                960x1200 source → 200x250 keeps the aspect exact; next/image
+                serves an optimized copy instead of the 785KB original. */}
+            <Image
+              alt="Hawk Mode mascot celebrating a Seahawks championship"
+              height={250}
+              priority
+              src="/mascots/hero.png"
+              style={{
+                border: "2px solid var(--green)",
+                borderRadius: "var(--radius-lg)",
+                boxShadow: "0 8px 28px rgba(0,0,0,0.45)",
+              }}
+              width={200}
+            />
           </div>
           <div className="flex-1" style={{ minWidth: 260 }}>
             <div

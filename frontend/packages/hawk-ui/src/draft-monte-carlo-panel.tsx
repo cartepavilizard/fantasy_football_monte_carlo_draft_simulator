@@ -145,7 +145,7 @@ export function MonteCarloPanel({
                 }}
               >
                 <div className="shrink-0">
-                  <VictoryBadge size={48} />
+                  <VictoryBadge size={150} />
                 </div>
                 <div className="min-w-0">
                   <div className="font-head text-xs font-bold uppercase tracking-[0.08em] text-green">

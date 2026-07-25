@@ -11,8 +11,33 @@ export interface MascotProps extends React.SVGProps<SVGSVGElement> {
   size?: number;
 }
 
-// Hawk head — the corner badge / wordmark logo. viewBox 0 0 64 64.
+// Corner badge / wordmark logo — the user-supplied Seahawks shield crest
+// (public/mascots/badge.png, background removed so it floats on navy like
+// the SVG it replaced). NOTE: this makes the package depend on an
+// app-served file; the design-system preview card for anything using
+// CornerBadge will show a missing image until that file ships with the
+// bundle. The original SVG hawk head is kept below as CornerBadgeSvg —
+// it stays legible at the 11-16px sizes this badge renders at on the
+// draft board, so it is the drop-in if the crest reads too muddy there.
 export const CornerBadge: React.FC<MascotProps> = ({
+  size = 28,
+  className,
+  style,
+}) => (
+  <img
+    alt=""
+    aria-hidden="true"
+    className={className}
+    height={size}
+    src="/mascots/badge.png"
+    style={{ display: "block", objectFit: "contain", ...(style as object) }}
+    width={size}
+  />
+);
+
+// The original inline hawk-head SVG, retained as a fallback for tiny
+// sizes and for portability (no external file dependency).
+export const CornerBadgeSvg: React.FC<MascotProps> = ({
   size = 28,
   className,
   ...props
@@ -119,9 +144,33 @@ export const HeroMascot: React.FC<MascotProps> = ({
   </svg>
 );
 
-// Victory badge — hawk with a trophy. viewBox 0 0 64 64. Sits on the Monte
-// Carlo suggested-pick panel.
+// Victory badge — the user-supplied "BUST SIZE: Fortuitous" meme
+// (public/mascots/victory.jpg). Sits on the Monte Carlo suggested-pick
+// panel. Unlike the square SVG it replaces, this is a 1.75:1 landscape
+// screenshot, so `size` here means WIDTH and the height follows the
+// aspect — at the old square 48px the gag text was unreadable.
 export const VictoryBadge: React.FC<MascotProps> = ({
+  size = 180,
+  className,
+  style,
+}) => (
+  <img
+    alt="Bust size: fortuitous"
+    className={className}
+    height={Math.round(size / 1.75)}
+    src="/mascots/victory.jpg"
+    style={{
+      display: "block",
+      borderRadius: "var(--radius-sm)",
+      border: "1px solid var(--border-2)",
+      ...(style as object),
+    }}
+    width={size}
+  />
+);
+
+// The original inline hawk-with-trophy SVG, retained for portability.
+export const VictoryBadgeSvg: React.FC<MascotProps> = ({
   size = 48,
   className,
   ...props

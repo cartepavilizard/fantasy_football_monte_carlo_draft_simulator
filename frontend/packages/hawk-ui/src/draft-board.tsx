@@ -3,7 +3,7 @@
 import * as React from "react";
 import clsx from "clsx";
 
-import { League, PickLogEntry } from "./types";
+import { League, PickLogEntry, Player } from "./types";
 import { CornerBadge, EmptyStateHawk } from "./mascots";
 
 // HAWK MODE draft board — the centerpiece of the draft room. A BOARD/LIST
@@ -86,6 +86,37 @@ export function DraftBoard({ league, children }: DraftBoardProps) {
     pickLog.forEach((p) => map.set(p.pick_number, p));
     return map;
   }, [pickLog]);
+
+  // name-keyed player lookup, memoized once over league.players (NOT per
+  // cell/per hover — the board can be 180 cells). Used to enrich the
+  // hover tooltip with ADP / consensus rank / tier when available.
+  const playerByName = React.useMemo(() => {
+    const map = new Map<string, Player>();
+    const players = league.players;
+    if (players) {
+      (["qb", "rb", "wr", "te", "dst", "k"] as const).forEach((pos) => {
+        (players[pos] ?? []).forEach((p) => {
+          map.set(p.name, p);
+        });
+      });
+    }
+    return map;
+  }, [league.players]);
+
+  // hovered cell for the PickTooltip bubble. null when nothing hovered.
+  const [hoveredPick, setHoveredPick] = React.useState<{
+    logged: PickLogEntry;
+    pickNo: number;
+    rect: DOMRect;
+  } | null>(null);
+
+  const handleCellHover = React.useCallback(
+    (logged: PickLogEntry, pickNo: number, el: HTMLElement) => {
+      setHoveredPick({ logged, pickNo, rect: el.getBoundingClientRect() });
+    },
+    [],
+  );
+  const handleCellLeave = React.useCallback(() => setHoveredPick(null), []);
 
   const draftComplete = league.draft_order.length === 0 && league.id !== "";
 
@@ -324,6 +355,8 @@ export function DraftBoard({ league, children }: DraftBoardProps) {
                         isPast={isPast}
                         mine={mine}
                         color={color}
+                        onHover={handleCellHover}
+                        onLeave={handleCellLeave}
                       />
                     );
                   })}
@@ -331,6 +364,13 @@ export function DraftBoard({ league, children }: DraftBoardProps) {
               );
             })}
           </div>
+          {hoveredPick && (
+            <PickTooltip
+              hovered={hoveredPick}
+              player={playerByName.get(hoveredPick.logged.player_name)}
+              n={n}
+            />
+          )}
         </div>
       )}
     </div>
@@ -346,7 +386,9 @@ const BoardCell: React.FC<{
   isPast: boolean;
   mine: boolean;
   color: string;
-}> = ({ pickNo, logged, isClock, isPast, mine, color }) => {
+  onHover?: (logged: PickLogEntry, pickNo: number, el: HTMLElement) => void;
+  onLeave?: () => void;
+}> = ({ pickNo, logged, isClock, isPast, mine, color, onHover, onLeave }) => {
   const filled = logged != null;
   // background tinted by position color for filled cells
   const bg = isClock
@@ -373,6 +415,12 @@ const BoardCell: React.FC<{
         border,
         overflow: "visible",
       }}
+      onMouseEnter={
+        filled && logged
+          ? (e) => onHover?.(logged, pickNo, e.currentTarget)
+          : undefined
+      }
+      onMouseLeave={filled ? onLeave : undefined}
     >
       {/* left position-color rail */}
       <span
@@ -466,6 +514,139 @@ const BoardCell: React.FC<{
       ) : (
         <div className="flex h-full items-center justify-center text-[9px] tabular-nums text-[color:var(--text-mute)]">
           {pickNo + 1}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Hover tooltip bubble for a filled board cell. Renders FIXED-positioned
+// from the hovered cell's bounding rect so it is never clipped by an
+// ancestor's overflow (the board sits inside bordered/padded containers
+// that would clip a naively absolutely-positioned bubble, especially for
+// the right-most column and bottom rows). The bubble does not capture the
+// mouse (pointerEvents: none) so hovering across cells stays smooth.
+const PickTooltip: React.FC<{
+  hovered: { logged: PickLogEntry; pickNo: number; rect: DOMRect };
+  player: Player | undefined;
+  n: number;
+}> = ({ hovered, player, n }) => {
+  const { logged, pickNo, rect } = hovered;
+  const color = positionColor(logged.position);
+  const round = n > 0 ? Math.floor(pickNo / n) + 1 : 1;
+  const inRound = n > 0 ? (pickNo % n) + 1 : 1;
+
+  // viewport-aware placement: flip to the left side for the right-most
+  // columns, and flip above the cell for the bottom rows.
+  const vw = typeof window !== "undefined" ? window.innerWidth : 1024;
+  const vh = typeof window !== "undefined" ? window.innerHeight : 768;
+  const W = 240;
+  const GAP = 8;
+
+  let left = rect.right + GAP;
+  if (left + W > vw - GAP) left = rect.left - GAP - W;
+  if (left < GAP) left = GAP;
+
+  const placeUp = rect.bottom + 200 > vh;
+  const top = placeUp ? rect.bottom : rect.top;
+  const transform = placeUp ? "translateY(-100%)" : "none";
+
+  // enrich from league.players when the lookup hit; omit any null/undefined
+  // field rather than printing "null"/"undefined".
+  const adp = player?.adp;
+  const ecr = player?.consensus_rank;
+  const tier = player?.tier;
+  const nflTeam = player?.nfl_team;
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        left,
+        top,
+        width: W,
+        zIndex: 9999,
+        pointerEvents: "none",
+        transform,
+        background: "var(--surface)",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius)",
+        boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
+        padding: "var(--sp-2) var(--sp-3)",
+      }}
+    >
+      {/* position accent rail */}
+      <span
+        style={{
+          position: "absolute",
+          left: 0,
+          top: 0,
+          bottom: 0,
+          width: 3,
+          background: color,
+          borderRadius: "var(--radius) 0 0 var(--radius)",
+        }}
+      />
+      <div className="flex items-center gap-2" style={{ paddingLeft: "var(--sp-1)" }}>
+        <span
+          className="font-head text-[9px] font-bold"
+          style={{
+            color: "#04240a",
+            borderRadius: 2,
+            padding: "0 4px",
+            background: color,
+          }}
+        >
+          {logged.position.toUpperCase()}
+        </span>
+        {nflTeam != null && nflTeam !== "" && (
+          <span className="text-[10px] uppercase tracking-[0.04em] text-[color:var(--text-dim)]">
+            {nflTeam}
+          </span>
+        )}
+      </div>
+      <div
+        className="font-head font-bold"
+        style={{
+          fontSize: "var(--fs-sm)",
+          color: "var(--text)",
+          marginTop: "var(--sp-1)",
+          paddingLeft: "var(--sp-1)",
+          lineHeight: 1.2,
+        }}
+      >
+        {logged.player_name}
+      </div>
+      <div
+        className="flex flex-wrap items-center gap-x-2 gap-y-0.5"
+        style={{
+          marginTop: "var(--sp-1)",
+          paddingLeft: "var(--sp-1)",
+          fontSize: "var(--fs-xs)",
+          color: "var(--text-dim)",
+        }}
+      >
+        <span>
+          Pick {pickNo + 1} · R{round}·{inRound}
+        </span>
+        <span style={{ color: "var(--text-mute)" }}>·</span>
+        <span>{logged.team_name}</span>
+      </div>
+      {(adp != null || ecr != null || tier != null) && (
+        <div
+          className="flex flex-wrap items-center gap-x-2 gap-y-0.5"
+          style={{
+            marginTop: "var(--sp-1)",
+            marginLeft: "var(--sp-1)",
+            paddingTop: "var(--sp-1)",
+            borderTop: "1px solid var(--border)",
+            fontSize: "var(--fs-xs)",
+            color: "var(--text-dim)",
+          }}
+        >
+          {adp != null && <span>ADP {adp}</span>}
+          {ecr != null && <span>ECR {ecr}</span>}
+          {tier != null && <span>Tier {tier}</span>}
         </div>
       )}
     </div>

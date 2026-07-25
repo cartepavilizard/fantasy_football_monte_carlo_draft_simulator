@@ -140,24 +140,34 @@ export default function DraftIdPage({ params }: { params: { id: string } }) {
             // Find the position in the results with the highest value
             // (excluding the non-numeric `suggested` and `homer_checks`
             // maps, added in A4/A6)
-            const bestPosition = Object.keys(data)
-              .filter((key) => key !== "suggested" && key !== "homer_checks")
-              .reduce((a, b) =>
-                data[a as keyof MonteCarloResults] >
-                data[b as keyof MonteCarloResults]
-                  ? a
-                  : b,
-              );
+            // ALLOWLIST the real position keys — never denylist the
+            // non-position ones. The result payload has grown extra
+            // fields over time (suggested, homer_checks, stack_flags),
+            // and a missed one silently WINS every comparison, because
+            // `1801.1 > {}` coerces to false and reduce then returns the
+            // object key. That crashed this handler (players["stack_flags"]
+            // is undefined) and surfaced as "Simulation Error".
+            const positionKeys = ["qb", "rb", "wr", "te", "dst", "k"] as const;
+            const candidates = positionKeys.filter(
+              (key) =>
+                typeof data[key] === "number" &&
+                draft.league.players[key].some(
+                  (player) => player.drafted === false,
+                ),
+            );
+            const bestPosition = candidates.length
+              ? candidates.reduce((a, b) => (data[a] > data[b] ? a : b))
+              : null;
 
-            if (bestPosition === "iterations") {
+            if (!bestPosition) {
               setBestPick("Simulation Error");
             } else {
-              const bestPlayer = draft.league.players[
-                bestPosition as keyof Players
-              ].find((player) => player.drafted === false);
+              const bestPlayer = draft.league.players[bestPosition].find(
+                (player) => player.drafted === false,
+              )!;
 
               setBestPick(
-                `${bestPlayer?.name} (${bestPosition.toLocaleUpperCase()})`,
+                `${bestPlayer.name} (${bestPosition.toLocaleUpperCase()})`,
               );
             }
           })

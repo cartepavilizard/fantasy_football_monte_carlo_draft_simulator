@@ -5,6 +5,7 @@ import * as React from "react";
 import { MonteCarloResults, PositionScarcity, SuggestedPick } from "./types";
 import { HawkCard, HawkCardTitle } from "./hawk-cards";
 import { TagBadge } from "./draft-tag-badge";
+import { VictoryBadge } from "./mascots";
 
 // HAWK MODE Suggested — the right rail's middle card. Per the composite
 // it's a green-tinted surface with "Suggested", the player name + a
@@ -102,6 +103,14 @@ export function Suggested({
   return (
     <HawkCard variant="green" padded>
       <HawkCardTitle tone="green">Suggested</HawkCardTitle>
+      {/* The victory art lives HERE rather than in the Monte Carlo panel
+          below the board: this card is in the right rail, above the fold,
+          so it's visible the moment the sim resolves on your turn. Sized
+          to the rail's width (~220px usable). */}
+      <VictoryBadge
+        size={210}
+        style={{ marginBottom: "var(--sp-2)", maxWidth: "100%" }}
+      />
       <div className="flex items-center gap-2" style={{ margin: "3px 0" }}>
         <span
           className="font-head text-[var(--fs-md)] font-bold uppercase truncate"

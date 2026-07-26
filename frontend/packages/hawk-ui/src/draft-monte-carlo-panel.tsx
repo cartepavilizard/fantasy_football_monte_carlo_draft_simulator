@@ -11,7 +11,6 @@ import {
 } from "./types";
 import { HawkCard, HawkCardHeader } from "./hawk-cards";
 import { TagBadge } from "./draft-tag-badge";
-import { VictoryBadge } from "./mascots";
 
 // HAWK MODE Monte Carlo panel — the existing "Monte Carlo Results" block
 // (iterations line, suggested-pick headline, per-position tag-aware
@@ -131,32 +130,12 @@ export function MonteCarloPanel({
               <p>Best Pick: {bestPick}</p>
               <p>{`${monteCarloResults.iterations} Iterations Performed`}</p>
             </div>
-            {/* HAWK MODE suggested-pick panel — victory mascot + the
-                engine's headline pick on a green-tinted navy cutout. */}
-            {bestPick && bestPick !== "Simulation Error" && (
-              <div
-                className="relative overflow-hidden flex items-center gap-3"
-                style={{
-                  background:
-                    "linear-gradient(120deg, rgba(105,190,40,0.16), transparent 70%), var(--navy)",
-                  border: "1px solid var(--green)",
-                  borderRadius: "var(--radius)",
-                  padding: "var(--sp-3)",
-                }}
-              >
-                <div className="shrink-0">
-                  <VictoryBadge size={150} />
-                </div>
-                <div className="min-w-0">
-                  <div className="font-head text-xs font-bold uppercase tracking-[0.08em] text-green">
-                    Suggested Pick
-                  </div>
-                  <div className="font-head text-lg font-bold uppercase text-white">
-                    {bestPick}
-                  </div>
-                </div>
-              </div>
-            )}
+            {/* The suggested-pick callout (victory art + headline pick)
+                used to live here, below the board and below the fold. It
+                duplicated the right rail's Suggested card, so it now
+                lives only there — above the fold, visible the moment the
+                sim resolves. This panel keeps the raw per-position
+                numbers, which is what it's actually for. */}
           </div>
         )}
         <p className="italic text-sm text-default-500">

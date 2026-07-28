@@ -41,6 +41,21 @@ ESPN_LEAGUE_IDS = [
     for league_id in os.getenv("ESPN_LEAGUE_IDS", "").replace(" ", "").split(",")
     if league_id
 ]  # comma-separated ids of the leagues to ingest history from
+# Only leagues whose draft actually ran online inside ESPN report a
+# trustworthy overall_pick/round_pick order. The other leagues drafted
+# offline (paper/spreadsheet board) and the commissioner keyed the finished
+# rosters in afterwards; for those, ESPN's overall_pick reflects data-entry
+# order, not the real selection order. An empty list means "trust nothing"
+# — the safe default that excludes every league from order-dependent metrics.
+ESPN_VERIFIED_DRAFT_ORDER_LEAGUE_IDS = [
+    int(league_id)
+    for league_id in os.getenv(
+        "ESPN_VERIFIED_DRAFT_ORDER_LEAGUE_IDS", ""
+    )
+    .replace(" ", "")
+    .split(",")
+    if league_id
+]
 YAHOO_CLIENT_ID = os.getenv("YAHOO_CLIENT_ID")
 YAHOO_CLIENT_SECRET = os.getenv("YAHOO_CLIENT_SECRET")
 YAHOO_REFRESH_TOKEN = os.getenv("YAHOO_REFRESH_TOKEN")

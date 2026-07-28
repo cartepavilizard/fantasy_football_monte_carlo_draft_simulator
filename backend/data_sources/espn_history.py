@@ -30,6 +30,7 @@ from models.config import (
     DRAFT_YEAR,
     ESPN_S2,
     ESPN_SWID,
+    ESPN_VERIFIED_DRAFT_ORDER_LEAGUE_IDS,
 )
 from models.sources import HistoricalIngestLog, HistoricalPick
 
@@ -130,6 +131,9 @@ class EspnHistoryIngester:
                     "raw_player_name": pick.playerName,
                     "is_keeper": bool(getattr(pick, "keeper_status", False)),
                     "bid_amount": int(bid) if bid else None,
+                    "draft_order_verified": (
+                        espn_league_id in ESPN_VERIFIED_DRAFT_ORDER_LEAGUE_IDS
+                    ),
                 }
             )
         if not picks:

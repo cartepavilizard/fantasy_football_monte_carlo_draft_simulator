@@ -170,6 +170,56 @@ def test_reingest_replaces_instead_of_duplicating():
     assert asyncio.run(count()) == 8  # 6 (2024) + 2 (2023), no duplicates
 
 
+def test_reingest_preserves_imported_draft_order():
+    """
+    A draft-board import is the only source of real pick order for a league
+    that drafted offline, and ESPN cannot re-supply it. Re-ingest replaces
+    the league-season wholesale, so it must carry verified order across the
+    replace instead of silently reverting it to ESPN's fabricated order.
+    """
+    engine = fresh_engine()
+    asyncio.run(ingest_league_history(engine, 111, ingester=make_ingester()))
+
+    async def import_a_board():
+        # Stand in for apply_board: give CMC his real slot and verify him.
+        picks = await engine.find(
+            HistoricalPick,
+            (HistoricalPick.season == 2024)
+            & (HistoricalPick.raw_player_name == "Christian McCaffrey"),
+        )
+        pick = list(picks)[0]
+        pick.overall_pick, pick.round_num, pick.round_pick = (4, 2, 2)
+        pick.draft_order_verified = True
+        await engine.save(pick)
+
+    asyncio.run(import_a_board())
+    asyncio.run(ingest_league_history(engine, 111, ingester=make_ingester()))
+
+    async def load():
+        picks = await engine.find(HistoricalPick, HistoricalPick.season == 2024)
+        logs = await engine.find(HistoricalIngestLog)
+        return list(picks), list(logs)
+
+    picks, logs = asyncio.run(load())
+    by_name = {pick.raw_player_name: pick for pick in picks}
+
+    cmc = by_name["Christian McCaffrey"]
+    assert (cmc.overall_pick, cmc.round_num, cmc.round_pick) == (4, 2, 2)
+    assert cmc.draft_order_verified is True
+
+    # Picks that were never on the board keep ESPN's values and stay unverified
+    josh = by_name["Josh Allen"]
+    assert josh.overall_pick == 3
+    assert josh.draft_order_verified is False
+
+    assert len(picks) == 6  # still a wholesale replace, no duplicates
+    # Each ingest writes its own log row; the restore belongs to the second.
+    log_2024 = max(
+        (log for log in logs if log.season == 2024), key=lambda log: log.fetched_at
+    )
+    assert log_2024.order_restored == 1
+
+
 def test_failed_season_is_logged_not_fatal():
     engine = fresh_engine()
     summary = asyncio.run(
@@ -192,7 +242,16 @@ def test_failed_season_is_logged_not_fatal():
 # --- endpoints -------------------------------------------------------------------
 
 
-def test_ingest_endpoint_builds_profiles(client, stub_espn):
+def test_ingest_endpoint_builds_profiles(client, stub_espn, monkeypatch):
+    # Order-dependent metrics (reach, runs, post-miss) are computed only for
+    # leagues whose draft order is verified, so the stub league has to be one
+    # -- otherwise this test would assert reach over an empty sample.
+    from data_sources import espn_history
+
+    monkeypatch.setattr(
+        espn_history, "ESPN_VERIFIED_DRAFT_ORDER_LEAGUE_IDS", [111]
+    )
+
     response = client.post("/owners/ingest/111")
     assert response.status_code == 200, response.text
     summary = response.json()

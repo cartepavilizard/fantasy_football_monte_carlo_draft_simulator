@@ -134,6 +134,7 @@ class HistoricalIngestLog(Model):
     auction: bool = False  # auction seasons are stored but excluded from profiles
     position_matched: int = 0  # picks whose position came from historical ADP
     adp_matched: int = 0  # picks with a historical ADP (reach features)
+    order_restored: int = 0  # verified draft order carried across a re-ingest
     fetched_at: datetime.datetime = ODField(default_factory=datetime.datetime.now)
 
 

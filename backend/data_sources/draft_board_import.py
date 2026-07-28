@@ -345,8 +345,14 @@ def _rank_match(cell_norm: str, pick_norm: str) -> int:
     # prefix relationship in either direction.
     cell_acro = "".join(c for c in cell_norm if c.isalpha())
     pick_acro = "".join(p[0] for p in pt if p)
+    # `pick_acro` must be at least two letters. A single-word pick name
+    # yields a one-letter acronym that prefix-matches almost any short
+    # cell: on the real 2025 Skunkweed board "CMC" tied Christian
+    # McCaffrey against "Cardinals D/ST" ("cmc".startswith("c")), and the
+    # tie made the matcher decline a cell it should have placed.
     if (
-        len(cell_acro) >= 2
+        len(pick_acro) >= 2
+        and len(cell_acro) >= 2
         and len(cell_acro) <= 4
         and (
             cell_acro == pick_acro
@@ -565,6 +571,63 @@ def _match_column(
         orig_i = pool[pi][0]
         consumed_local.append(orig_i)
         pool.pop(pi)
+
+    # RESIDUAL ELIMINATION. If this owner ends the pass with exactly one
+    # unmatched cell and exactly one unconsumed pick, the pairing is
+    # forced by arithmetic rather than guessed by name similarity: every
+    # other cell in the column already claimed a distinct pick, so the
+    # leftovers can only be each other. This is what rescues the cells no
+    # name rule can reach -- on the real 2025 board that is a joke entry
+    # ("Dicker? I hardly know her" -> Cameron Dicker), a D/ST written by
+    # city rather than nickname ("Washington" -> Commanders D/ST), and a
+    # first name the owner made ambiguous by rostering both Brocks
+    # ("BROCK" -> Brock Bowers, with Brock Purdy already claimed by a
+    # later cell). It stays safe because it is scoped to one owner and
+    # requires BOTH sides to be down to a single candidate; two leftovers
+    # on either side means the pairing is not forced and we still decline.
+    #
+    # One exception: the rule assumes the leftover cell is an entry no name
+    # rule could READ, not a DUPLICATE of a cell already placed. If the
+    # leftover names an already-consumed pick unambiguously, the board lists
+    # someone twice and the arithmetic no longer forces anything -- pairing it
+    # with whatever pick happens to be left would invent a pick out of a
+    # transcription error. So decline when the leftover has a strong match
+    # (better than the weak token-overlap fallback) against a consumed pick.
+    # "BROCK" survives this test: it only ever reached `fallback` against the
+    # already-claimed Brock Purdy, which is exactly the ambiguity that made
+    # the first pass decline it rather than evidence of a duplicate.
+    if len(unmatched_cells) == 1 and len(pool) == 1:
+        leftover = unmatched_cells[0]
+        orig_i, pick, _pn = pool[0]
+        leftover_norm = normalize_name(leftover.text)
+        already_consumed = set(consumed) | set(consumed_local)
+        duplicates_a_placed_pick = any(
+            _rank_match(
+                leftover_norm, normalize_name(_pick_name(picks_by_guid[guid][i]))
+            )
+            > _STAGE_FALLBACK
+            for i in already_consumed
+        )
+        if duplicates_a_placed_pick:
+            return placements, unmatched_cells, consumed_local
+        placements.append(
+            Placement(
+                pick=pick,
+                overall_pick=overall_pick_for(
+                    leftover.round_num, slot, team_count, snake
+                ),
+                round_num=leftover.round_num,
+                round_pick=_round_pick_for(
+                    leftover.round_num, slot, team_count, snake
+                ),
+                slot=slot,
+                cell_text=leftover.text,
+                method="residual",
+            )
+        )
+        consumed_local.append(orig_i)
+        pool.pop(0)
+        unmatched_cells = []
 
     return placements, unmatched_cells, consumed_local
 

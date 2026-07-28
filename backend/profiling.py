@@ -77,12 +77,36 @@ def _season_context(picks: List[HistoricalPick]) -> List[dict]:
     pick, the owner event with its board context (runs, sniped targets)
     """
     board = sorted(picks, key=lambda pick: pick.overall_pick)
+
+    # Board ADJACENCY (positional runs, sniped targets) only means anything
+    # where overall_pick is real. A season can be MIXED: a draft-board import
+    # places most picks but leaves a few it refuses to guess, and those keep
+    # their fabricated ESPN overall_pick. Walking them alongside the placed
+    # picks would drop a wrong neighbour into the lookback window of picks
+    # whose order IS real, so adjacency is computed over the verified picks
+    # alone whenever the season has any. A fully unverified season keeps its
+    # whole board: nothing consumes its adjacency anyway, and its events
+    # still feed the round-bucketed metrics that survive commissioner entry.
+    verified_board = [pick for pick in board if pick.draft_order_verified]
+    context_board = verified_board if verified_board else board
+    context_index = {id(pick): i for i, pick in enumerate(context_board)}
+
     events = []
-    for index, pick in enumerate(board):
+    for pick in board:
         if pick.is_keeper or not pick.member_guid:
             continue  # keepers/unowned slots are context, not choices
-        recent = board[max(0, index - RUN_LOOKBACK): index]
+
+        # None for an unplaced pick in a mixed season: it has no real
+        # position on the board, so it gets no adjacency rather than wrong
+        # adjacency. Its event is still emitted for the round-based metrics.
+        index = context_index.get(id(pick))
         run_position = None
+        missed_position = None
+        if index is None:
+            events.append(_event_for(pick, run_position, missed_position))
+            continue
+
+        recent = context_board[max(0, index - RUN_LOOKBACK): index]
         positions = [p.position for p in recent if p.position]
         for position in set(positions):
             if positions.count(position) >= RUN_MIN:
@@ -91,9 +115,8 @@ def _season_context(picks: List[HistoricalPick]) -> List[dict]:
 
         # Inferred miss: a plausible target (ADP near this owner's slot)
         # went off the board within the last MISS_LOOKBACK picks
-        missed_position = None
         best_distance = None
-        for prior in board[max(0, index - MISS_LOOKBACK): index]:
+        for prior in context_board[max(0, index - MISS_LOOKBACK): index]:
             if prior.historical_adp is None or not prior.position:
                 continue
             adp = prior.historical_adp
@@ -107,27 +130,34 @@ def _season_context(picks: List[HistoricalPick]) -> List[dict]:
                     best_distance = distance
                     missed_position = prior.position
 
-        events.append(
-            {
-                "member_guid": pick.member_guid,
-                "display_name": pick.owner_display_name,
-                "league_id": pick.espn_league_id,
-                "season": pick.season,
-                "round_num": pick.round_num,
-                "bucket": bucket_for_round(pick.round_num),
-                "position": pick.position,
-                "overall_pick": pick.overall_pick,
-                "adp_delta": (
-                    pick.overall_pick - pick.historical_adp
-                    if pick.historical_adp is not None
-                    else None
-                ),
-                "run_position": run_position,
-                "missed_position": missed_position,
-                "order_verified": bool(pick.draft_order_verified),
-            }
-        )
+        events.append(_event_for(pick, run_position, missed_position))
     return events
+
+
+def _event_for(
+    pick: HistoricalPick,
+    run_position: Optional[str],
+    missed_position: Optional[str],
+) -> dict:
+    """One owner event: the pick itself plus whatever board context applies"""
+    return {
+        "member_guid": pick.member_guid,
+        "display_name": pick.owner_display_name,
+        "league_id": pick.espn_league_id,
+        "season": pick.season,
+        "round_num": pick.round_num,
+        "bucket": bucket_for_round(pick.round_num),
+        "position": pick.position,
+        "overall_pick": pick.overall_pick,
+        "adp_delta": (
+            pick.overall_pick - pick.historical_adp
+            if pick.historical_adp is not None
+            else None
+        ),
+        "run_position": run_position,
+        "missed_position": missed_position,
+        "order_verified": bool(pick.draft_order_verified),
+    }
 
 
 def _position_frequency(events, weight_of) -> dict:

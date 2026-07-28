@@ -242,11 +242,48 @@ async def ingest_league_history(
         adp_map = await ingester.adp_map(season, fetched["team_count"])
         ingester.enrich_picks(picks, adp_map)
 
+        # A draft-board import is the ONLY source of real pick order for a
+        # league that drafted offline, and it cannot be re-derived from ESPN
+        # -- so snapshot any verified order before the wholesale replace
+        # below discards it, and restore it afterwards. Without this a
+        # routine history refresh silently reverts an imported board to
+        # ESPN's fabricated order and un-verifies it.
+        preserved_order = {
+            (doc.get("canonical_name") or doc.get("raw_player_name")): doc
+            for doc in await picks_collection.find(
+                {
+                    "espn_league_id": espn_league_id,
+                    "season": season,
+                    "draft_order_verified": True,
+                }
+            ).to_list(length=None)
+            if (doc.get("canonical_name") or doc.get("raw_player_name"))
+        }
+
         # Idempotent re-ingest: this league-season is replaced wholesale
         await picks_collection.delete_many(
             {"espn_league_id": espn_league_id, "season": season}
         )
         await engine.save_all([HistoricalPick(**pick) for pick in picks])
+
+        if preserved_order:
+            restored = 0
+            for pick in await engine.find(
+                HistoricalPick,
+                (HistoricalPick.espn_league_id == espn_league_id)
+                & (HistoricalPick.season == season),
+            ):
+                key = pick.canonical_name or pick.raw_player_name
+                prior = preserved_order.get(key)
+                if prior is None:
+                    continue  # not on the imported board; keep ESPN's values
+                pick.overall_pick = prior["overall_pick"]
+                pick.round_num = prior["round_num"]
+                pick.round_pick = prior["round_pick"]
+                pick.draft_order_verified = True
+                await engine.save(pick)
+                restored += 1
+            log.order_restored = restored
 
         log.picks = len(picks)
         log.keepers = sum(1 for pick in picks if pick["is_keeper"])

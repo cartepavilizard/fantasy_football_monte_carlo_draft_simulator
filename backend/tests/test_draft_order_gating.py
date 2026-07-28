@@ -171,3 +171,31 @@ def test_zero_verified_picks_verification_block():
     assert block["total_picks"] == 3
     assert block["verified_seasons"] == []
     assert block["unverified_seasons"] == [2023]
+
+
+def test_draft_order_verified_defaults_to_false():
+    """
+    The default is load-bearing, not cosmetic. Every historical pick written
+    before this field existed comes back from Mongo with the key ABSENT, so
+    the model default is what those rows evaluate to. A default of True would
+    silently re-admit every commissioner-entered draft into the order-based
+    metrics -- the precise fabricated data the flag exists to exclude -- and
+    it would do so invisibly, because tests that build picks explicitly never
+    exercise the default.
+    """
+    pick = HistoricalPick(
+        espn_league_id=1,
+        season=2024,
+        overall_pick=1,
+        round_num=1,
+        round_pick=1,
+        espn_team_id=1,
+        raw_player_name="Somebody",
+        member_guid="G1",
+    )
+    assert pick.draft_order_verified is False
+
+    # And a profile built from picks that never set the flag must treat the
+    # whole season as unverified.
+    profile = profile_of([pick], current_season=2024)
+    assert profile.metrics["order_verification"]["verified_picks"] == 0

@@ -22,8 +22,14 @@ def pick(
     bid=None,
     name="Some Player",
     display="Dave",
+    verified=True,
 ):
+    # These tests exercise the METRIC MATH, so their boards are order-verified
+    # by default -- otherwise the order-dependent metrics (reach, runs,
+    # post-miss) are gated out and every assertion here measures an empty
+    # sample. The gating itself is covered in test_draft_order_gating.py.
     return HistoricalPick(
+        draft_order_verified=verified,
         espn_league_id=league,
         season=season,
         overall_pick=overall,

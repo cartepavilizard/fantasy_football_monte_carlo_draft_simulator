@@ -91,7 +91,12 @@ class HistoricalPick(Model):
     canonical_name: Optional[str] = None
     position: Optional[str] = None
     is_keeper: bool = False
-    draft_order_verified: bool = True  # True only when overall_pick/round_pick reflect the real selection order
+    # True only when overall_pick/round_pick reflect the real selection order.
+    # The default MUST be False: it is what any row written before this field
+    # existed reads back as, and defaulting to True would silently re-admit
+    # every commissioner-entered draft into the order-based metrics -- the
+    # exact fabricated data the flag exists to keep out.
+    draft_order_verified: bool = False
     bid_amount: Optional[int] = None  # nonzero -> auction season, excluded
     historical_adp: Optional[float] = None  # backfilled from FFC by season
     fetched_at: datetime.datetime = ODField(default_factory=datetime.datetime.now)

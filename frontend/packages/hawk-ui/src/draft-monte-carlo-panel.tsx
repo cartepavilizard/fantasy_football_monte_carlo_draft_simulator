@@ -251,7 +251,11 @@ export function MonteCarloPanel({
                         className="ml-auto font-bold"
                         style={{ color: "var(--green)" }}
                       >
-                        −{cost.toFixed(1)}
+                        {/* A COST, so it reads positive: "waiting costs you
+                            59.1 pts here". Rendering it as −59.1 contradicted
+                            the reason line directly above, which says
+                            "waiting costs 59.1 pts at WR". */}
+                        {cost.toFixed(1)}
                       </span>
                     </div>
                   );

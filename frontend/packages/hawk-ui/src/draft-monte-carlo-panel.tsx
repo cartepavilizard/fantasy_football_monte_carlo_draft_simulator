@@ -90,6 +90,14 @@ export interface MonteCarloPanelProps {
   recommendedPosition?: string | null;
   // Plain-terms explanation of the recommended position.
   recommendationReason?: string | null;
+  // Additive breakdown of `iterations` by position. The headline
+  // `iterations` counts one increment per POSITION in the inner rollout
+  // loop, so it is the SUM of these per-position counts -- not "your
+  // pick simulated N times". When present the iterations line becomes
+  // "19 per position (76 total)"; when absent the panel renders exactly
+  // as it does today so older payloads still work. Snake_case backend
+  // payloads alias to iterationsPerPosition at the call site.
+  iterationsPerPosition?: Record<string, number> | null;
 }
 
 export function MonteCarloPanel({
@@ -104,6 +112,7 @@ export function MonteCarloPanel({
   yourNextPick,
   recommendedPosition,
   recommendationReason,
+  iterationsPerPosition,
 }: MonteCarloPanelProps) {
   if (!isSimulatorTurn) {
     return (
@@ -148,7 +157,32 @@ export function MonteCarloPanel({
           <div className="flex flex-col gap-2 w-full">
             <div className="flex justify-between">
               <p>Best Pick: {bestPick}</p>
-              <p>{`${monteCarloResults.iterations} Iterations Performed`}</p>
+              <p
+                style={{
+                  color: iterationsPerPosition
+                    ? "var(--text)"
+                    : "var(--text-mute)",
+                }}
+              >
+                {iterationsPerPosition &&
+                Object.keys(iterationsPerPosition).length > 0
+                  ? (() => {
+                      // `iterations` is the SUM of per-position rollout
+                      // counts (the loop increments once per position in
+                      // its inner loop), so the honest headline is the
+                      // per-position count plus the additive total.
+                      const counts = Object.values(iterationsPerPosition);
+                      const total = monteCarloResults.iterations;
+                      const min = Math.min(...counts);
+                      const max = Math.max(...counts);
+                      const perPosition =
+                        min === max
+                          ? `${min} per position`
+                          : `${min}-${max} per position`;
+                      return `${perPosition} (${total} total)`;
+                    })()
+                  : `${monteCarloResults.iterations} Iterations Performed`}
+              </p>
             </div>
             {/* The suggested-pick callout (victory art + headline pick)
                 used to live here, below the board and below the fold. It

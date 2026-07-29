@@ -438,3 +438,54 @@ def test_build_reason_single_eligible_position_never_ties():
     cost = {"rb": 12.0, "wr": 0.0, "qb": 0.0, "te": 0.0, "dst": 0.0, "k": 0.0}
     reason = _build_reason(cost, {"rb"})
     assert reason == "waiting costs 12.0 pts at RB"
+
+
+# --- MonteCarloSimulationResult reporting contract ------------------------------
+
+
+def test_monte_carlo_result_carries_iterations_per_position_summing_to_iterations():
+    # The reporting contract, not the engine: `iterations` is the SUM of
+    # the per-position rollout counts (the loop increments once per
+    # position in its inner loop), so the per-position breakdown must
+    # (a) carry one entry per simulated position, (b) sum to `iterations`.
+    # The four positions here differ by one across the total, exactly as
+    # they do when the total does not divide evenly -- the contract holds
+    # in the uneven case too.
+    from models.team import MonteCarloSimulationResult
+
+    iterations_per_position = {"qb": 19, "rb": 19, "wr": 19, "te": 19}
+    result = MonteCarloSimulationResult(
+        qb=300.0,
+        rb=290.0,
+        wr=280.0,
+        te=150.0,
+        iterations=sum(iterations_per_position.values()),
+        iterations_per_position=iterations_per_position,
+    )
+    assert result.iterations_per_position == iterations_per_position
+    assert set(result.iterations_per_position) == {"qb", "rb", "wr", "te"}
+    assert sum(result.iterations_per_position.values()) == result.iterations
+
+
+def test_monte_carlo_result_iterations_per_position_sums_when_uneven():
+    # 76 across four positions is 19 each -- but 77 splits 20/19/19/19,
+    # which is the case the headline must honestly describe. The sum
+    # contract still holds.
+    from models.team import MonteCarloSimulationResult
+
+    iterations_per_position = {"qb": 20, "rb": 19, "wr": 19, "te": 19}
+    result = MonteCarloSimulationResult(
+        iterations=sum(iterations_per_position.values()),
+        iterations_per_position=iterations_per_position,
+    )
+    assert sum(result.iterations_per_position.values()) == result.iterations == 77
+
+
+def test_monte_carlo_result_defaults_iterations_per_position_to_empty():
+    # Older payloads (pre-breakdown) still validate: the field defaults
+    # to an empty dict so the frontend prop is absent and the panel
+    # renders its legacy "N Iterations Performed" line.
+    from models.team import MonteCarloSimulationResult
+
+    result = MonteCarloSimulationResult(iterations=76)
+    assert result.iterations_per_position == {}

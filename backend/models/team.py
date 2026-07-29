@@ -452,6 +452,15 @@ class MonteCarloSimulationResult(BaseModel):
     dst: float = 0
     k: float = 0
     iterations: int = 0
+    # Additive breakdown of `iterations` per position: the rollout loop
+    # increments its counter once per POSITION inside the inner loop, so
+    # the headline total is the SUM of these counts, not "your pick
+    # simulated N times". One entry per simulated position (qb/rb/wr/te,
+    # plus dst/k after round 7); values sum to `iterations`, differing by
+    # at most one across positions when the total does not divide evenly.
+    # Leave `iterations` exactly as-is -- backend/scripts/validate_monte_carlo.py
+    # asserts the existing total bound and owns that contract.
+    iterations_per_position: Dict[str, int] = {}
     # A4: the tag-aware candidate evaluated for each position (who the
     # engine would actually take there, and why); positions whose
     # remaining players are all avoid-tagged are absent

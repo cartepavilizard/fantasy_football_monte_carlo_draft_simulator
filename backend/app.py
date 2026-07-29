@@ -680,6 +680,17 @@ def monte_carlo_draft(
             )
             i += 1
 
+    # Capture how many rollouts each position actually got before the
+    # lists collapse into averages. `iterations` counts one increment
+    # per position sampled in the inner loop, so it is the SUM of these
+    # per-position counts -- not 76 simulations of "your pick". Reporting
+    # the breakdown makes the headline honest ("19 per position (76
+    # total)") without changing the loop, its stop condition, or the
+    # meaning of the `iterations` bound.
+    iterations_per_position = {
+        position: len(samples) for position, samples in results.items()
+    }
+
     # Turn the arrays into averages
     for position in results.keys():
         samples = results[position]
@@ -687,6 +698,7 @@ def monte_carlo_draft(
             round(sum(samples) / len(samples), 2) if samples else 0.0
         )
     results["iterations"] = i
+    results["iterations_per_position"] = iterations_per_position
     results["suggested"] = suggested
     results["homer_checks"] = homer_checks
     results["stack_flags"] = stack_flags

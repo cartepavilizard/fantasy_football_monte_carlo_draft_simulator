@@ -19,6 +19,7 @@ from models.value_over_wait import (
     eligible_positions,
     expected_best_available,
 )
+from models.value_over_wait import TIE_MARGIN_POINTS, _build_reason
 
 
 YEAR = "2024"
@@ -83,6 +84,59 @@ def test_expected_best_available_treats_empty_pool_as_zero():
     picked_sequences = [["A"]]
     result = expected_best_available(pools, picked_sequences, YEAR)
     assert result == {"rb": 0.0, "wr": 0.0}
+
+
+# --- expected_best_available cutoff (t1 checkpoint) ----------------------------
+
+
+def test_expected_best_available_cutoff_slices_to_first_n_picks():
+    # pool rb: A=100, B=50, C=40. Each rollout's FULL sequence removes
+    # both A and B, leaving only C=40. With cutoff=1 only the first pick
+    # of each rollout counts: rollout 1 takes A -> max survivor {B,C}=50;
+    # rollout 2 takes B -> max survivor {A,C}=100. Average of per-rollout
+    # maxima = 75 -- not 40 (the no-cutoff answer), proving the cutoff
+    # slices the ordered pick list rather than being ignored.
+    pools = pool(
+        "rb",
+        make_player("A", "rb", 100.0),
+        make_player("B", "rb", 50.0),
+        make_player("C", "rb", 40.0),
+    )
+    picked_sequences = [["A", "B"], ["B", "A"]]
+    assert expected_best_available(pools, picked_sequences, YEAR, cutoff=1) == {"rb": 75.0}
+    # The t2 behavior (no cutoff) is unchanged.
+    assert expected_best_available(pools, picked_sequences, YEAR) == {"rb": 40.0}
+
+
+def test_expected_best_available_cutoff_none_matches_no_cutoff():
+    # cutoff=None must be exactly equivalent to the legacy call.
+    pools = pool("rb", make_player("A", "rb", 100.0), make_player("B", "rb", 50.0))
+    picked_sequences = [["A"], ["B"]]
+    assert (
+        expected_best_available(pools, picked_sequences, YEAR, cutoff=None)
+        == expected_best_available(pools, picked_sequences, YEAR)
+        == {"rb": 75.0}
+    )
+
+
+def test_expected_best_available_cutoff_average_of_maxima_not_max_of_averages():
+    # The average-of-maxima property (the rule's defining trait) must
+    # hold at the t1 checkpoint too. cutoff=1: rollout 1 takes A ->
+    # max{B,C,D}=50; rollout 2 takes B -> max{A,C,D}=100. Average of
+    # maxima = 75. The wrong max-of-averages answer would be 50 (each
+    # player survives half the rollouts: max(100*0.5, 50*0.5, ...) = 50),
+    # which is not what the cutoff call returns.
+    pools = pool(
+        "rb",
+        make_player("A", "rb", 100.0),
+        make_player("B", "rb", 50.0),
+        make_player("C", "rb", 40.0),
+        make_player("D", "rb", 30.0),
+    )
+    picked_sequences = [["A", "B"], ["B", "A"]]
+    result = expected_best_available(pools, picked_sequences, YEAR, cutoff=1)
+    assert result["rb"] == 75.0
+    assert result["rb"] != 50.0
 
 
 # --- cost_of_waiting -------------------------------------------------------------
@@ -257,3 +311,130 @@ def test_cost_of_waiting_report_final_pick_returns_zero_costs():
     assert report["your_next_pick"] is None
     assert "final pick" in report["recommendation_reason"].lower()
     assert report["iterations"] == 0
+
+
+# --- value_now discounting when the simulator is not on the clock ----------------
+
+
+def _live_pools(league):
+    """The same undrafted, non-avoid pools cost_of_waiting_report builds."""
+    return {
+        position: [
+            player
+            for player in getattr(league.players, position)
+            if player.drafted is False and player.tag != "avoid"
+        ]
+        for position in ["qb", "rb", "wr", "te", "dst", "k"]
+    }
+
+
+def report_league_off_clock():
+    """
+    Three teams, snake draft, simulator drafts 2nd so it is NOT on the
+    clock (t1=1). Round 0 order [Me, Sim, Other]; round 1 snake
+    [Other, Sim, Me]; draft_order = [0,1,2,2,1,0,...], simulator_slots =
+    [1,4,7,...] -> t1=1, t2=4. Across the t2=4 horizon the three opponent
+    slots (Me, Other, Other) draft, so the RB-only stub model takes the
+    top three RBs -- crucially, the top RB is gone BEFORE the simulator's
+    own upcoming pick (the t1 checkpoint), which is what value_now must
+    reflect.
+    """
+    players = (
+        [make_player(f"RB{i}", "rb", 300.0 - i * 5, tier=1) for i in range(5)]
+        + [make_player(f"WR{i}", "wr", 250.0 - i * 5, tier=1) for i in range(3)]
+        + [make_player(f"QB{i}", "qb", 200.0 - i, tier=1) for i in range(2)]
+        + [make_player(f"TE{i}", "te", 120.0 - i, tier=1) for i in range(2)]
+    )
+    teams = [
+        Team(name="Me", owner="me", draft_order=1),
+        Team(name="Sim", owner="sim", draft_order=2, simulator=True),
+        Team(name="Other", owner="other", draft_order=3),
+    ]
+    return League(
+        teams=teams,
+        name="test",
+        round_size=4,
+        current_draft_turn=0,
+        copy_for_draft=False,
+        players=Players(players=players),
+        logistic_regression_variables={
+            "x": [1, 2, 3, 4, 5, 6],
+            "y": ["RB", "WR", "RB", "WR", "RB", "WR"],
+        },
+    )
+
+
+def test_cost_of_waiting_report_value_now_equals_live_board_when_on_clock():
+    # t1 == 0 (simulator on the clock): value_now must be the raw live
+    # board exactly -- no simulation discounting.
+    league = report_league()
+    raw_board = best_available_now(_live_pools(league), YEAR)
+    report = cost_of_waiting_report(
+        league, RbStubModel(), seconds=5.0, max_iterations=10, seed=7, year=YEAR
+    )
+    assert report["value_now"]["rb"] == raw_board["rb"] == 300.0
+    assert report["value_now"]["wr"] == raw_board["wr"] == 250.0
+    assert report["value_now"] == raw_board
+
+
+def test_cost_of_waiting_report_discounts_value_now_when_not_on_clock():
+    # t1 == 1 (simulator NOT on the clock): the top RB is taken before
+    # the simulator's upcoming pick, so value_now must drop below the raw
+    # live board (300 -> 295). WR is never touched by the RB-only stub
+    # model, so its value_now still equals the raw board.
+    league = report_league_off_clock()
+    raw_board = best_available_now(_live_pools(league), YEAR)
+    report = cost_of_waiting_report(
+        league, RbStubModel(), seconds=5.0, max_iterations=10, seed=7, year=YEAR
+    )
+    assert raw_board["rb"] == 300.0
+    assert report["value_now"]["rb"] == 295.0
+    assert report["value_now"]["rb"] < raw_board["rb"]
+    assert report["value_now"]["wr"] == raw_board["wr"] == 250.0
+
+
+def test_cost_of_waiting_report_value_now_uses_average_of_maxima_at_t1():
+    # Same off-clock league: every rollout is identical under the
+    # deterministic stub model + fixed seed, so the per-rollout t1 max
+    # (295) equals the average (295). The discounting path is the
+    # average-of-per-rollout-maxima computation, not the raw live board
+    # max (300) and not a max-of-averages collapse.
+    league = report_league_off_clock()
+    report = cost_of_waiting_report(
+        league, RbStubModel(), seconds=5.0, max_iterations=10, seed=7, year=YEAR
+    )
+    assert report["value_now"]["rb"] == 295.0
+    assert report["value_now"]["rb"] != 300.0
+    assert report["iterations"] == 10
+
+
+# --- recommendation reason near-tie flag ----------------------------------------
+
+
+def test_build_reason_flags_near_tie_within_margin():
+    # Top two eligible costs (57.1 vs 55.9) within TIE_MARGIN_POINTS ->
+    # the leader is still named, but the reason plainly says it is close.
+    cost = {"rb": 57.1, "wr": 55.9, "qb": 10.0, "te": 0.0, "dst": 0.0, "k": 0.0}
+    eligible = {"rb", "wr", "qb", "te"}
+    reason = _build_reason(cost, eligible)
+    assert "RB 57.1" in reason
+    assert "WR 55.9" in reason
+    assert "within" in reason and str(int(TIE_MARGIN_POINTS)) in reason
+    assert "defensible" in reason
+
+
+def test_build_reason_clear_winner_keeps_single_line_format():
+    # Gap wider than TIE_MARGIN_POINTS -> the original single-line format
+    # naming both numbers, no tie language.
+    cost = {"rb": 57.1, "wr": 30.0, "qb": 0.0, "te": 0.0, "dst": 0.0, "k": 0.0}
+    eligible = {"rb", "wr", "qb", "te"}
+    reason = _build_reason(cost, eligible)
+    assert reason == "waiting costs 57.1 pts at RB vs 30.0 pts at WR"
+    assert "within" not in reason
+    assert "defensible" not in reason
+
+
+def test_build_reason_single_eligible_position_never_ties():
+    cost = {"rb": 12.0, "wr": 0.0, "qb": 0.0, "te": 0.0, "dst": 0.0, "k": 0.0}
+    reason = _build_reason(cost, {"rb"})
+    assert reason == "waiting costs 12.0 pts at RB"

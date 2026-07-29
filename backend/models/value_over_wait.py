@@ -30,6 +30,11 @@ POSITIONS = ["qb", "rb", "wr", "te", "dst", "k"]
 # engine always has a position to recommend
 SKILL_POSITIONS = ["qb", "rb", "wr", "te"]
 
+# When the top two eligible positions' costs of waiting fall within this
+# many points, the recommendation names the leader but flags the tie so
+# the user knows either pick is defensible.
+TIE_MARGIN_POINTS = 5.0
+
 
 def simulate_picked_sequences(
     league,
@@ -107,7 +112,10 @@ def best_available_now(pools: Dict[str, list], year) -> Dict[str, float]:
 
 
 def expected_best_available(
-    pools: Dict[str, list], picked_sequences: List[List[str]], year
+    pools: Dict[str, list],
+    picked_sequences: List[List[str]],
+    year,
+    cutoff: int = None,
 ) -> Dict[str, float]:
     """
     For EACH rollout compute the best projected points at that position
@@ -115,6 +123,14 @@ def expected_best_available(
     rollouts. This is an average of per-rollout maxima — NOT the max of
     per-player survival-weighted averages, and not a survival-probability
     approximation.
+
+    `cutoff` slices each rollout's ordered pick list to its first `cutoff`
+    entries before building the taken set. The cost-of-waiting rule uses
+    this to evaluate the board at the simulator's own upcoming pick
+    (t1) rather than the t2 horizon: the players taken in the first t1
+    slots of a rollout are exactly the ones gone before the simulator
+    picks. When `cutoff` is None the whole picked sequence is used, which
+    is the t2 behavior the rule has always had.
     """
     out: Dict[str, float] = {}
     n = len(picked_sequences)
@@ -124,7 +140,8 @@ def expected_best_available(
             continue
         per_rollout_max: List[float] = []
         for picked in picked_sequences:
-            picked_set = set(picked)
+            taken = picked[:cutoff] if cutoff is not None else picked
+            picked_set = set(taken)
             survivors = [
                 _projection(player, year)
                 for player in pool
@@ -191,6 +208,11 @@ def _build_reason(cost: Dict[str, float], eligible) -> str:
     if len(ranked) >= 2:
         p2 = ranked[1]
         c2 = cost.get(p2, 0.0)
+        if c1 - c2 <= TIE_MARGIN_POINTS:
+            return (
+                f"{p1.upper()} {c1:.1f} and {p2.upper()} {c2:.1f} are within "
+                f"{TIE_MARGIN_POINTS:.0f} pts; either is defensible"
+            )
         return f"waiting costs {c1:.1f} pts at {p1.upper()} vs {c2:.1f} pts at {p2.upper()}"
     return f"waiting costs {c1:.1f} pts at {p1.upper()}"
 
@@ -274,7 +296,18 @@ def cost_of_waiting_report(
         seed=seed,
     )
 
-    value_now = best_available_now(pools, year)
+    # When the simulator is on the clock (t1 == 0) the live board IS the
+    # board at its upcoming pick, so value_now is the raw best available.
+    # When t1 > 0 other teams pick first, so the live board overstates
+    # what will actually be there: value_now is instead the expected best
+    # available at the t1 checkpoint, computed from the same rollouts
+    # already run for the t2 horizon by slicing each rollout's ordered
+    # pick list to its first t1 entries (the players gone before the
+    # simulator picks). No second simulation is run.
+    if t1 == 0:
+        value_now = best_available_now(pools, year)
+    else:
+        value_now = expected_best_available(pools, picked_sequences, year, cutoff=t1)
     value_at_next = expected_best_available(pools, picked_sequences, year)
     cost = cost_of_waiting(value_now, value_at_next)
 

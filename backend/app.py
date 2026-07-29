@@ -696,11 +696,17 @@ def monte_carlo_draft(
     # its RNG seeding cannot perturb the seeded rollout averages. It is
     # far cheaper than the full-draft rollouts because it only simulates
     # to the simulator's next turn, so a small budget slice suffices.
+    # 60 rollouts, not 20: measured across 12 seeds on a real 10-team board,
+    # 20 rollouts recommended WR 11 times and RB once (the winner's cost
+    # carries sd 4.9 against a 9.2-point margin, so it flips), while 60 was
+    # unanimous at sd 2.7. It costs 3.6s at ~60ms a rollout -- an order of
+    # magnitude cheaper than a full-draft EV rollout, because this only
+    # simulates as far as the simulator's next turn.
     cow_report = cost_of_waiting_report(
         league,
         draft_pick_model,
-        seconds=min(seconds, 5.0),
-        max_iterations=20,
+        seconds=min(seconds, 8.0),
+        max_iterations=60,
         seed=seed,
         year=str(DRAFT_YEAR),
     )

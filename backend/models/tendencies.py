@@ -99,13 +99,51 @@ def blend_position_weights(
     return {position: value / total for position, value in blended.items()}
 
 
-def reach_sd_for(team_tendencies: dict, generic_tendencies: dict) -> float:
-    """The owner's reach SD if well-sampled, else the league-generic one"""
+def reach_sd_for(
+    team_tendencies: dict,
+    generic_tendencies: dict,
+    round_num: Optional[int] = None,
+) -> float:
+    """
+    The owner's reach SD if well-sampled, else the league-generic one.
+
+    When round_num is given the resolution order is: the owner's own
+    per-bucket sd (if that bucket is well-sampled), then the owner's
+    overall sd, then the generic per-bucket sd, then the generic overall
+    sd, then the reference. Round-bucketing matters because an owner's
+    reach spread is far wider in late rounds than early; a single owner
+    wide number saturates TEMPERATURE_MAX and lets late-round randomness
+    leak into round 1. When round_num is omitted the function behaves
+    exactly as the original two-argument form.
+    """
     reach = (team_tendencies or {}).get("reach", {})
+    generic = generic_tendencies or {}
+
+    bucket_label = bucket_for_round(round_num) if round_num is not None else None
+
+    if bucket_label is not None:
+        bucket_stats = reach.get("by_bucket", {}).get(bucket_label)
+        if (
+            bucket_stats
+            and bucket_stats.get("n", 0) >= MIN_SAMPLE
+            and bucket_stats.get("sd_delta") is not None
+        ):
+            return bucket_stats["sd_delta"]
+
     if reach.get("n", 0) >= MIN_SAMPLE and reach.get("sd_delta") is not None:
         return reach["sd_delta"]
-    generic = (generic_tendencies or {}).get("reach_sd")
-    return generic if generic is not None else REACH_SD_REFERENCE
+
+    if bucket_label is not None:
+        generic_bucket = generic.get("by_bucket", {}).get(bucket_label)
+        if (
+            generic_bucket
+            and generic_bucket.get("n", 0) >= MIN_SAMPLE
+            and generic_bucket.get("sd_delta") is not None
+        ):
+            return generic_bucket["sd_delta"]
+
+    generic_sd = generic.get("reach_sd")
+    return generic_sd if generic_sd is not None else REACH_SD_REFERENCE
 
 
 def candidate_weights(
@@ -150,23 +188,49 @@ def build_generic_tendencies(metrics_list: List[dict]) -> dict:
     """
     League-generic reach behavior pooled (sample-size weighted) across
     all known owners — the fallback that gives even unprofiled teams
-    realistic player-level variance
+    realistic player-level variance. Pools a per-bucket spread alongside
+    the overall reach_sd so an unprofiled owner still gets a
+    round-appropriate value rather than a single late-round-saturated one.
     """
     weighted_sd = 0.0
     weighted_mean = 0.0
     total_n = 0
+    bucket_acc: Dict[str, Dict[str, float]] = {
+        label: {"sd": 0.0, "mean": 0.0, "n": 0}
+        for _, _, label in ROUND_BUCKETS
+    }
     for metrics in metrics_list:
         reach = metrics.get("reach", {})
         n = reach.get("n", 0)
-        if n <= 0 or reach.get("sd_delta") is None:
-            continue
-        weighted_sd += reach["sd_delta"] * n
-        weighted_mean += reach.get("mean_delta", 0.0) * n
-        total_n += n
+        if n > 0 and reach.get("sd_delta") is not None:
+            weighted_sd += reach["sd_delta"] * n
+            weighted_mean += reach.get("mean_delta", 0.0) * n
+            total_n += n
+        for _, _, label in ROUND_BUCKETS:
+            bucket = reach.get("by_bucket", {}).get(label)
+            if not bucket or bucket.get("n", 0) <= 0 or bucket.get("sd_delta") is None:
+                continue
+            acc = bucket_acc[label]
+            acc["sd"] += bucket["sd_delta"] * bucket["n"]
+            acc["mean"] += bucket.get("mean_delta", 0.0) * bucket["n"]
+            acc["n"] += bucket["n"]
     if total_n == 0:
         return {}
-    return {
+    result = {
         "reach_sd": round(weighted_sd / total_n, 2),
         "reach_mean": round(weighted_mean / total_n, 2),
         "n": total_n,
     }
+    by_bucket: Dict[str, dict] = {}
+    for _, _, label in ROUND_BUCKETS:
+        acc = bucket_acc[label]
+        if acc["n"] <= 0:
+            continue
+        by_bucket[label] = {
+            "n": acc["n"],
+            "mean_delta": round(acc["mean"] / acc["n"], 2),
+            "sd_delta": round(acc["sd"] / acc["n"], 2),
+        }
+    if by_bucket:
+        result["by_bucket"] = by_bucket
+    return result

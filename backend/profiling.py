@@ -196,12 +196,29 @@ def _reach_stats(events, weight_of) -> dict:
         w for e, w in zip(valued, weights)
         if e["adp_delta"] <= -REACH_THRESHOLD_PICKS
     )
+    # Per round-bucket spread, using the SAME recency weighting and
+    # helper as the overall figures: a single owner-wide sd saturates
+    # TEMPERATURE_MAX and lets late-round randomness leak into round 1.
+    by_bucket: Dict[str, dict] = {}
+    for _, _, label in ROUND_BUCKETS:
+        bucket_valued = [e for e in valued if e["bucket"] == label]
+        if not bucket_valued:
+            continue  # only emit buckets that actually have events
+        b_deltas = [e["adp_delta"] for e in bucket_valued]
+        b_weights = [weight_of(e) for e in bucket_valued]
+        b_mean, b_sd = _weighted_mean_sd(b_deltas, b_weights)
+        by_bucket[label] = {
+            "n": len(bucket_valued),
+            "mean_delta": round(b_mean, 2),
+            "sd_delta": round(b_sd, 2),
+        }
     return {
         "n": len(valued),
         "mean_delta": round(mean, 2),
         "sd_delta": round(sd, 2),
         "reach_rate": round(reach_weight / sum(weights), 4),
         "threshold_picks": REACH_THRESHOLD_PICKS,
+        "by_bucket": by_bucket,
     }
 
 

@@ -391,7 +391,13 @@ def _choose_position_player(
     if not _profiles_active(league, team) or len(position_players) == 1:
         return position_players[0]
     candidates = position_players[:TOP_K_CANDIDATES]
-    reach_sd = reach_sd_for(team.owner_tendencies, league.generic_tendencies)
+    teams = getattr(league, "teams", None)
+    round_num = (
+        (pick_number - 1) // len(teams) + 1 if teams else 1
+    )
+    reach_sd = reach_sd_for(
+        team.owner_tendencies, league.generic_tendencies, round_num
+    )
     weights = candidate_weights(
         [candidate.adp for candidate in candidates], pick_number, reach_sd
     )

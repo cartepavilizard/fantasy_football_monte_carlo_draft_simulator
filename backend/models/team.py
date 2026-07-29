@@ -15,7 +15,7 @@ from odmantic import EmbeddedModel, Model, ObjectId, Reference
 from odmantic import Field as ODField
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sklearn.base import RegressorMixin
-from typing import Dict, List, Union
+from typing import Dict, List, Optional, Union
 
 
 """
@@ -465,3 +465,15 @@ class MonteCarloSimulationResult(BaseModel):
     # simulator team's current roster; absent positions have no stack.
     # Defaults to empty so pre-F1 payloads still validate.
     stack_flags: Dict[str, dict] = {}
+    # Cost-of-waiting rule (the replacement for the four-branch
+    # full-draft Monte Carlo position recommendation): deterministic
+    # points-the-best-player-costs-me-to-wait numbers per position, plus
+    # the single recommended position/pick. Defaults keep pre-rule
+    # payloads validating.
+    cost_of_waiting: Dict[str, float] = {}
+    value_now: Dict[str, float] = {}
+    value_at_next_pick: Dict[str, float] = {}
+    recommended_position: Optional[str] = None
+    recommended_pick: Optional[str] = None
+    recommendation_reason: str = ""
+    your_next_pick: Optional[int] = None

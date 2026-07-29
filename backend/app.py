@@ -65,6 +65,7 @@ from models.homer import homer_check
 from models.notifications import ensure_lock_reminders
 from models.sources import BlendedRanking, HistoricalPick, OwnerAlias, OwnerProfile
 from models.suggestions import SuggestedPick, suggest_candidate
+from models.value_over_wait import cost_of_waiting_report, simulate_picked_sequences
 from models.team import (
     Draft,
     DraftSimple,
@@ -689,6 +690,28 @@ def monte_carlo_draft(
     results["suggested"] = suggested
     results["homer_checks"] = homer_checks
     results["stack_flags"] = stack_flags
+
+    # Cost-of-waiting recommendation (the replacement for the noisy
+    # four-branch full-draft rule): run once after the rollout loop so
+    # its RNG seeding cannot perturb the seeded rollout averages. It is
+    # far cheaper than the full-draft rollouts because it only simulates
+    # to the simulator's next turn, so a small budget slice suffices.
+    cow_report = cost_of_waiting_report(
+        league,
+        draft_pick_model,
+        seconds=min(seconds, 5.0),
+        max_iterations=20,
+        seed=seed,
+        year=str(DRAFT_YEAR),
+    )
+    results["cost_of_waiting"] = cow_report["cost_of_waiting"]
+    results["value_now"] = cow_report["value_now"]
+    results["value_at_next_pick"] = cow_report["value_at_next_pick"]
+    results["recommended_position"] = cow_report["recommended_position"]
+    results["recommended_pick"] = cow_report["recommended_pick"]
+    results["recommendation_reason"] = cow_report["recommendation_reason"]
+    results["your_next_pick"] = cow_report["your_next_pick"]
+
     return MonteCarloSimulationResult(**results)
 
 
@@ -730,10 +753,10 @@ def scarcity_analysis(
     A non-None `seed` makes the run reproducible: it seeds the worker's
     module-level RNG and disables the wall-clock early-out (which would
     otherwise make the iteration count machine-speed-dependent), leaving
-    max_iterations as the only stop condition.
+    max_iterations as the only stop condition. The Monte Carlo rollout
+    loop itself lives in models.value_over_wait.simulate_picked_sequences
+    so the cost-of-waiting rule can reuse the exact same machinery.
     """
-    if seed is not None:
-        random.seed(seed)
     simulator_team = [i for i, team in enumerate(league.teams) if team.simulator]
     if not simulator_team:
         raise HTTPException(status_code=400, detail="League has no simulator team")
@@ -789,23 +812,17 @@ def scarcity_analysis(
     survive_at_next = {name: 0 for name in candidates}
     any_at_pick = {position: 0 for position in pools}
     any_at_next = {position: 0 for position in pools}
-    iterations = 0
     start_time = time.time()
-    while horizon > 0 and iterations < max_iterations:
-        league_copy = league.model_copy(deep=True)
-        picked = []
-        for _ in range(horizon):
-            if league_copy.draft_order[0] == simulator:
-                # Skip the simulator's slot: assignment re-validation
-                # advances draft_order without removing a player
-                league_copy.current_draft_turn += 1
-            else:
-                name = simulate_pick(league_copy, draft_pick_model)
-                draft_player(name, league_copy)
-                picked.append(name)
-
-        # Slots before t1 are all opponents, so the first t1 picks are
-        # exactly the players gone by the simulator's upcoming pick
+    picked_sequences, iterations = simulate_picked_sequences(
+        league,
+        draft_pick_model,
+        horizon,
+        simulator,
+        seconds=seconds,
+        max_iterations=max_iterations,
+        seed=seed,
+    )
+    for picked in picked_sequences:
         gone_at_pick = set(picked[:t1])
         gone_at_next = set(picked)
         for name in candidates:
@@ -818,9 +835,6 @@ def scarcity_analysis(
                 any_at_pick[position] += 1
             if tier_names[position] - gone_at_next:
                 any_at_next[position] += 1
-        iterations += 1
-        if seed is None and time.time() - start_time > seconds:
-            break
 
     def probability(counter, name):
         # With nothing simulated (on the clock at the final pick, or a

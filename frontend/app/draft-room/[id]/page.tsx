@@ -446,6 +446,7 @@ export default function DraftIdPage({ params }: { params: { id: string } }) {
               yourNextPick={monteCarloResults.your_next_pick}
               recommendedPosition={monteCarloResults.recommended_position}
               recommendationReason={monteCarloResults.recommendation_reason}
+              iterationsPerPosition={monteCarloResults.iterations_per_position}
             />
 
             <ScarcityPanel

@@ -151,6 +151,10 @@ export type MonteCarloResults = {
   // The pick number of the user's next turn, for context. null when this
   // is the user's last pick or there is no upcoming turn.
   your_next_pick?: number | null;
+  // How many rollouts each position actually got. `iterations` above is
+  // the SUM of these (the rollout loop increments once per position), so
+  // it reads misleadingly high as a per-pick count on its own.
+  iterations_per_position?: Record<string, number>;
 };
 
 // Draft results are just an object of each team name with a number (score) as value

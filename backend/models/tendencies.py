@@ -108,13 +108,17 @@ def reach_sd_for(
     The owner's reach SD if well-sampled, else the league-generic one.
 
     When round_num is given the resolution order is: the owner's own
-    per-bucket sd (if that bucket is well-sampled), then the owner's
-    overall sd, then the generic per-bucket sd, then the generic overall
-    sd, then the reference. Round-bucketing matters because an owner's
-    reach spread is far wider in late rounds than early; a single owner
-    wide number saturates TEMPERATURE_MAX and lets late-round randomness
-    leak into round 1. When round_num is omitted the function behaves
-    exactly as the original two-argument form.
+    per-bucket sd (if that bucket is well-sampled), then the league-
+    generic per-bucket sd for that round, then the owner's overall sd,
+    then the generic overall sd, then the reference. The generic bucket
+    is preferred over the owner's round-blind lifetime average because
+    the round effect dominates the owner effect: measured reach spread
+    by round swings ~7x (3.77 in rounds 1-2 vs 26.65 in 10+), while the
+    owner effect within a round swings only ~2x — so a round-appropriate
+    league number is a better estimate than the owner's lifetime figure
+    whenever the owner's own bucket is too thin to trust. When round_num
+    is omitted the function behaves exactly as the original two-argument
+    form: owner overall, then the generic overall sd, then the reference.
     """
     reach = (team_tendencies or {}).get("reach", {})
     generic = generic_tendencies or {}
@@ -130,9 +134,6 @@ def reach_sd_for(
         ):
             return bucket_stats["sd_delta"]
 
-    if reach.get("n", 0) >= MIN_SAMPLE and reach.get("sd_delta") is not None:
-        return reach["sd_delta"]
-
     if bucket_label is not None:
         generic_bucket = generic.get("by_bucket", {}).get(bucket_label)
         if (
@@ -141,6 +142,9 @@ def reach_sd_for(
             and generic_bucket.get("sd_delta") is not None
         ):
             return generic_bucket["sd_delta"]
+
+    if reach.get("n", 0) >= MIN_SAMPLE and reach.get("sd_delta") is not None:
+        return reach["sd_delta"]
 
     generic_sd = generic.get("reach_sd")
     return generic_sd if generic_sd is not None else REACH_SD_REFERENCE

@@ -94,25 +94,73 @@ def test_reach_sd_for_selects_the_right_bucket_for_a_round():
     assert reach_sd_for(ROUND_AWARE_OWNER, generic, round_num=12) == approx(28.88)
 
 
-def test_under_sampled_bucket_falls_back_to_overall():
-    under_sampled = {
+def test_under_sampled_own_bucket_falls_back_to_generic_bucket():
+    # the swap: a thin own bucket now resolves to the generic bucket for
+    # that round rather than the owner's round-blind lifetime average
+    thin_own = {
         "reach": {
             "n": 40,
-            "sd_delta": 23.62,
+            "sd_delta": 16.12,  # the old lifetime fallback (too wide for rd 1)
             "by_bucket": {
-                "1-2": {"n": 2, "sd_delta": 5.0},  # n < MIN_SAMPLE
+                "1-2": {"n": 2, "sd_delta": 5.0},  # n < MIN_SAMPLE -> ignored
                 "10+": {"n": 38, "sd_delta": 28.88},
             },
         }
     }
-    # n=2 in the bucket is not trusted -> falls through to overall
-    assert reach_sd_for(under_sampled, {"reach_sd": 30.0}, round_num=1) == approx(
-        23.62
-    )
-    # the well-sampled bucket is still used
-    assert reach_sd_for(under_sampled, {"reach_sd": 30.0}, round_num=12) == approx(
-        28.88
-    )
+    generic = {
+        "reach_sd": 23.62,
+        "by_bucket": {
+            "1-2": {"n": 10, "sd_delta": 5.13},
+            "10+": {"n": 24, "sd_delta": 28.88},
+        },
+    }
+    # round 1: own bucket thin -> generic 1-2 bucket wins (not the 16.12 lifetime)
+    assert reach_sd_for(thin_own, generic, round_num=1) == approx(5.13)
+    # round 12: own bucket is well-sampled -> still wins over the generic
+    assert reach_sd_for(thin_own, generic, round_num=12) == approx(28.88)
+
+
+def test_well_sampled_own_bucket_still_wins_over_generic_bucket():
+    # even when the generic bucket is well-sampled, the owner's own bucket
+    # for that round is the first choice
+    owner = {
+        "reach": {
+            "n": 60,
+            "sd_delta": 23.62,
+            "by_bucket": {
+                "1-2": {"n": 10, "sd_delta": 4.20},  # owner's own figure
+            },
+        }
+    }
+    generic = {
+        "reach_sd": 23.62,
+        "by_bucket": {
+            "1-2": {"n": 50, "sd_delta": 5.13},  # well-sampled but generic
+        },
+    }
+    assert reach_sd_for(owner, generic, round_num=1) == approx(4.20)
+
+
+def test_no_generic_bucket_falls_through_to_owner_overall():
+    # the old rung is still there: when no generic bucket exists for the
+    # round, a thin own bucket falls through to the owner's overall figure
+    thin_own = {
+        "reach": {
+            "n": 40,
+            "sd_delta": 16.12,
+            "by_bucket": {
+                "1-2": {"n": 2, "sd_delta": 5.0},  # thin
+            },
+        }
+    }
+    # generic has no by_bucket at all -> owner overall is the next rung
+    assert reach_sd_for(thin_own, {"reach_sd": 30.0}, round_num=1) == approx(16.12)
+    # a thin generic bucket for the round also falls through to owner overall
+    thin_generic = {
+        "reach_sd": 30.0,
+        "by_bucket": {"1-2": {"n": 2, "sd_delta": 5.0}},  # n < MIN_SAMPLE
+    }
+    assert reach_sd_for(thin_own, thin_generic, round_num=1) == approx(16.12)
 
 
 def test_two_argument_behavior_is_unchanged():

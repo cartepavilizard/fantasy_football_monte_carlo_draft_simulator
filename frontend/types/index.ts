@@ -127,6 +127,30 @@ export type MonteCarloResults = {
   // A6: present only for positions whose suggested pick is a homer-team
   // (Seahawks) player
   homer_checks: Record<string, HomerCheck>;
+  // Cost-of-waiting rule: for each position, best player available now
+  // minus best expected to still be there at your NEXT turn. Replaces the
+  // old "simulate the whole remaining draft per position and argmax the
+  // final-roster averages" rule, which was noisy AND wrong. ALL optional —
+  // a draft created before this change (or an older cached payload) must
+  // still typecheck and still render.
+  // Per-position maps (keyed qb/rb/wr/te/dst/k):
+  cost_of_waiting?: Record<string, number>;
+  value_now?: Record<string, number>;
+  value_at_next_pick?: Record<string, number>;
+  // The position the new rule recommends (tag-blind; the app's tag-aware
+  // player choice still comes from `suggested[position]`). null when the
+  // backend couldn't pick (e.g. no next turn / draft-ending pick).
+  recommended_position?: string | null;
+  // The tag-blind player name the new rule's projection picks at the
+  // recommended position. Only used as a player fallback when the
+  // tag-aware `suggested[position].name` is missing.
+  recommended_pick?: string | null;
+  // Plain-terms explanation of the recommended position, e.g.
+  // "waiting costs 69.3 pts at RB vs 63.2 pts at WR".
+  recommendation_reason?: string;
+  // The pick number of the user's next turn, for context. null when this
+  // is the user's last pick or there is no upcoming turn.
+  your_next_pick?: number | null;
 };
 
 // Draft results are just an object of each team name with a number (score) as value

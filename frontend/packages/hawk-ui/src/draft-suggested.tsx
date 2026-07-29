@@ -45,6 +45,14 @@ export interface SuggestedProps {
   // sim is still running, or no suggestion has resolved.
   canDraft: boolean;
   onDraft: (name: string) => void;
+  // Cost-of-waiting rule: the backend's explanation for WHY this
+  // position was recommended (e.g. "waiting costs 69.3 pts at RB vs
+  // 63.2 pts at WR"). About the POSITION — distinct from `suggested`
+  // .reason which is about the PLAYER. Optional; older payloads lack it.
+  recommendationReason?: string;
+  // The cost-of-waiting value for this card's position, surfaced
+  // compactly as a chip. Null/undefined when not applicable.
+  costOfWaiting?: number | null;
 }
 
 export function Suggested({
@@ -54,6 +62,8 @@ export function Suggested({
   scarcity,
   canDraft,
   onDraft,
+  recommendationReason,
+  costOfWaiting,
 }: SuggestedProps) {
   const hasPick = bestPick && bestPick !== "Simulation Error";
 
@@ -133,6 +143,48 @@ export function Suggested({
           </span>
         )}
       </div>
+      {/* Cost-of-waiting rule: WHY THIS POSITION. The single most useful
+          thing on the card and the app previously showed nothing like it.
+          Visually distinct from the player reason below — green + bold +
+          labelled, so the two never read as the same line. */}
+      {recommendationReason && (
+        <p
+          className="text-xs font-bold"
+          style={{
+            margin: "0 0 var(--sp-2)",
+            color: "var(--green)",
+            borderTop: "1px solid var(--border)",
+            paddingTop: "var(--sp-2)",
+          }}
+        >
+          <span
+            className="font-head uppercase"
+            style={{ opacity: 0.7, marginRight: 4 }}
+          >
+            Why {bestPosition ? bestPosition.toUpperCase() : "this pos"}:
+          </span>
+          {recommendationReason}
+        </p>
+      )}
+      {typeof costOfWaiting === "number" && (
+        <span
+          className="font-head text-[9px] font-bold uppercase"
+          style={{
+            display: "inline-block",
+            color: "var(--text-mute)",
+            background: "var(--surface-3)",
+            border: "1px solid var(--border)",
+            borderRadius: 2,
+            padding: "1px 5px",
+            margin: "0 0 var(--sp-2)",
+          }}
+        >
+          waiting costs {Math.round(costOfWaiting)} pts
+        </span>
+      )}
+      {/* The PLAYER reason — why THIS PLAYER at this position (sleeper
+          boosts, my_guy tie-breaks, avoid filtering). Distinct from the
+          position-level recommendationReason above. */}
       <p
         className="text-xs"
         style={{

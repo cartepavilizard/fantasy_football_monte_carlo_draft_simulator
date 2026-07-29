@@ -76,6 +76,20 @@ export interface MonteCarloPanelProps {
   onRetry: () => void;
   monteCarloResults: MonteCarloResults;
   bestPick: string;
+  // Cost-of-waiting rule (the new PRIMARY recommendation). All optional;
+  // when the payload lacks them the panel renders exactly as it does
+  // today (the legacy per-position averages line as its headline).
+  // Per-position maps keyed qb/rb/wr/te/dst/k.
+  // Field alias cost_of_waiting|costOfWaiting (backend snake_case -> UI camelCase):
+  costOfWaiting?: Record<string, number> | null;
+  valueNow?: Record<string, number> | null;
+  valueAtNextPick?: Record<string, number> | null;
+  // The pick number of the user's next turn, for context.
+  yourNextPick?: number | null;
+  // The position the new rule recommends (highlighted in the table).
+  recommendedPosition?: string | null;
+  // Plain-terms explanation of the recommended position.
+  recommendationReason?: string | null;
 }
 
 export function MonteCarloPanel({
@@ -84,6 +98,12 @@ export function MonteCarloPanel({
   onRetry,
   monteCarloResults,
   bestPick,
+  costOfWaiting,
+  valueNow,
+  valueAtNextPick,
+  yourNextPick,
+  recommendedPosition,
+  recommendationReason,
 }: MonteCarloPanelProps) {
   if (!isSimulatorTurn) {
     return (
@@ -138,16 +158,148 @@ export function MonteCarloPanel({
                 numbers, which is what it's actually for. */}
           </div>
         )}
-        <p className="italic text-sm text-default-500">
-          {`
-            QB: ${Math.round(monteCarloResults.qb).toLocaleString()} |
-            RB: ${Math.round(monteCarloResults.rb).toLocaleString()} |
-            WR: ${Math.round(monteCarloResults.wr).toLocaleString()} |
-            TE: ${Math.round(monteCarloResults.te).toLocaleString()} |
-            DST: ${Math.round(monteCarloResults.dst).toLocaleString()} |
-            K: ${Math.round(monteCarloResults.k).toLocaleString()}
-          `}
-        </p>
+        {/* Cost-of-waiting rule — the panel's PRIMARY content. Per
+            position: best available now vs best expected at your NEXT
+            turn, and the difference (the cost of waiting). The position
+            the backend recommends is highlighted. Renders ONLY when the
+            new payload carries the maps; older payloads fall through to
+            the legacy averages line below, unchanged. */}
+        {costOfWaiting && Object.keys(costOfWaiting).length > 0 && (
+          <div
+            className="flex flex-col gap-1 w-full"
+            style={{ padding: "4px 0" }}
+          >
+            <div
+              className="flex items-center gap-2"
+              style={{ flexWrap: "wrap" }}
+            >
+              {yourNextPick != null && (
+                <span
+                  className="font-head text-[10px] font-bold uppercase"
+                  style={{
+                    color: "var(--text-mute)",
+                    background: "var(--surface-2)",
+                    border: "1px solid var(--border)",
+                    borderRadius: 2,
+                    padding: "1px 5px",
+                  }}
+                >
+                  your next pick: {yourNextPick}
+                </span>
+              )}
+              {recommendedPosition && (
+                <span
+                  className="font-head text-[10px] font-bold uppercase"
+                  style={{
+                    color: "#04240a",
+                    background: "var(--green)",
+                    borderRadius: 2,
+                    padding: "1px 5px",
+                  }}
+                >
+                  rec: {recommendedPosition.toUpperCase()}
+                </span>
+              )}
+            </div>
+            {recommendationReason && (
+              <p
+                className="text-xs font-bold"
+                style={{ color: "var(--green)", margin: 0 }}
+              >
+                {recommendationReason}
+              </p>
+            )}
+            <div className="flex flex-col gap-0.5 w-full">
+              {positions
+                .filter((p) => costOfWaiting[p] != null)
+                .map((p) => {
+                  const cost = costOfWaiting[p];
+                  const now = valueNow?.[p];
+                  const next = valueAtNextPick?.[p];
+                  const isRec = recommendedPosition === p;
+                  return (
+                    <div
+                      key={p}
+                      className="flex items-center gap-1.5 text-xs"
+                      style={{
+                        padding: "2px 4px",
+                        borderRadius: "var(--radius-sm)",
+                        background: isRec ? "var(--surface-3)" : "transparent",
+                        border: isRec
+                          ? "1px solid var(--border-2)"
+                          : "1px solid transparent",
+                      }}
+                    >
+                      <span
+                        className="font-head font-bold uppercase"
+                        style={{
+                          minWidth: 26,
+                          color: isRec ? "var(--green)" : "var(--text)",
+                        }}
+                      >
+                        {p.toLocaleUpperCase()}
+                      </span>
+                      <span style={{ color: "var(--text)" }}>
+                        {now != null ? now.toFixed(1) : "—"}
+                      </span>
+                      <span style={{ color: "var(--text-mute)" }}>now vs</span>
+                      <span style={{ color: "var(--text-dim)" }}>
+                        {next != null ? next.toFixed(1) : "—"}
+                      </span>
+                      <span style={{ color: "var(--text-mute)" }}>next</span>
+                      <span
+                        className="ml-auto font-bold"
+                        style={{ color: "var(--green)" }}
+                      >
+                        −{cost.toFixed(1)}
+                      </span>
+                    </div>
+                  );
+                })}
+            </div>
+          </div>
+        )}
+        {/* The legacy per-position full-draft averages — the SUPERSEDED
+            rule's output. Known to be noisy AND wrong (on the same board
+            it gave three different answers across three identical runs,
+            and with randomness off it still ranked a TE ADP 22.8 above a
+            WR ADP 3.8). Kept for traceability and older payloads; demoted
+            visually and labelled honestly when the cost-of-waiting display
+            above is present. Renders exactly as before when it is not. */}
+        {costOfWaiting && Object.keys(costOfWaiting).length > 0 ? (
+          <details
+            className="text-xs"
+            style={{ color: "var(--text-mute)" }}
+          >
+            <summary
+              className="italic"
+              style={{ cursor: "pointer", opacity: 0.7 }}
+            >
+              older, noisier estimate (full-draft averages)
+            </summary>
+            <p className="italic" style={{ marginTop: 2 }}>
+              {`
+                QB: ${Math.round(monteCarloResults.qb).toLocaleString()} |
+                RB: ${Math.round(monteCarloResults.rb).toLocaleString()} |
+                WR: ${Math.round(monteCarloResults.wr).toLocaleString()} |
+                TE: ${Math.round(monteCarloResults.te).toLocaleString()} |
+                DST: ${Math.round(monteCarloResults.dst).toLocaleString()} |
+                K: ${Math.round(monteCarloResults.k).toLocaleString()}
+              `}
+            </p>
+          </details>
+        ) : (
+          <p className="italic text-sm text-default-500">
+            {`
+              QB: ${Math.round(monteCarloResults.qb).toLocaleString()} |
+              RB: ${Math.round(monteCarloResults.rb).toLocaleString()} |
+              WR: ${Math.round(monteCarloResults.wr).toLocaleString()} |
+              TE: ${Math.round(monteCarloResults.te).toLocaleString()} |
+              DST: ${Math.round(monteCarloResults.dst).toLocaleString()} |
+              K: ${Math.round(monteCarloResults.k).toLocaleString()}
+            `}
+          </p>
+        )}
         {/* A4: the tag-aware candidate the engine would take at each
             position, plus the A6 homer-check table where present. */}
         {Object.keys(monteCarloResults.suggested).length > 0 && (

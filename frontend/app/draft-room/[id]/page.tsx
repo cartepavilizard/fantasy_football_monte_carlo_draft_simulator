@@ -137,38 +137,77 @@ export default function DraftIdPage({ params }: { params: { id: string } }) {
           .then((data) => {
             setMonteCarloResults(data);
 
-            // Find the position in the results with the highest value
-            // (excluding the non-numeric `suggested` and `homer_checks`
-            // maps, added in A4/A6)
-            // ALLOWLIST the real position keys — never denylist the
-            // non-position ones. The result payload has grown extra
-            // fields over time (suggested, homer_checks, stack_flags),
-            // and a missed one silently WINS every comparison, because
-            // `1801.1 > {}` coerces to false and reduce then returns the
-            // object key. That crashed this handler (players["stack_flags"]
-            // is undefined) and surfaced as "Simulation Error".
-            const positionKeys = ["qb", "rb", "wr", "te", "dst", "k"] as const;
-            const candidates = positionKeys.filter(
-              (key) =>
-                typeof data[key] === "number" &&
-                draft.league.players[key].some(
-                  (player) => player.drafted === false,
-                ),
-            );
-            const bestPosition = candidates.length
-              ? candidates.reduce((a, b) => (data[a] > data[b] ? a : b))
-              : null;
+            // Decide WHICH POSITION to draft. The backend's new primary
+            // rule is "cost of waiting": for each position, the best
+            // player available now minus the best expected to still be
+            // there at your next turn. It returns `recommended_position`
+            // directly, so we prefer that — but only when that position
+            // actually still has an undrafted player on this board.
+            let bestPosition: keyof Players | null = null;
+            const recPos = data.recommended_position;
+            if (
+              typeof recPos === "string" &&
+              recPos.length > 0 &&
+              (draft.league.players[recPos as keyof Players] ?? []).some(
+                (player) => player.drafted === false,
+              )
+            ) {
+              bestPosition = recPos as keyof Players;
+            } else {
+              // FALLBACK — the older argmax-of-averages rule. Load-bearing
+              // for older payloads that predate `recommended_position`.
+              // ALLOWLIST the real position keys — never denylist the
+              // non-position ones. The result payload has grown extra
+              // fields over time (suggested, homer_checks, stack_flags),
+              // and a missed one silently WINS every comparison, because
+              // `1801.1 > {}` coerces to false and reduce then returns the
+              // object key. That crashed this handler (players["stack_flags"]
+              // is undefined) and surfaced as "Simulation Error".
+              const positionKeys = ["qb", "rb", "wr", "te", "dst", "k"] as const;
+              const candidates = positionKeys.filter(
+                (key) =>
+                  typeof data[key] === "number" &&
+                  draft.league.players[key].some(
+                    (player) => player.drafted === false,
+                  ),
+              );
+              bestPosition = candidates.length
+                ? candidates.reduce((a, b) => (data[a] > data[b] ? a : b))
+                : null;
+            }
 
             if (!bestPosition) {
               setBestPick("Simulation Error");
             } else {
-              const bestPlayer = draft.league.players[bestPosition].find(
-                (player) => player.drafted === false,
-              )!;
+              // The new rule decides the POSITION; the existing tag-aware
+              // logic in `suggested[position]` keeps deciding the PLAYER
+              // (sleeper boosts, my_guy tie-breaks, avoid filtering). The
+              // backend's `recommended_pick` is tag-blind, so only use it
+              // as a fallback. Final fallback: first undrafted player at
+              // the position.
+              const suggestedName = data.suggested[bestPosition]?.name;
+              let playerName: string | null = null;
+              if (suggestedName) {
+                playerName = suggestedName;
+              } else if (
+                typeof data.recommended_pick === "string" &&
+                data.recommended_pick.length > 0
+              ) {
+                playerName = data.recommended_pick;
+              } else {
+                const firstUndrafted = draft.league.players[
+                  bestPosition
+                ].find((player) => player.drafted === false);
+                playerName = firstUndrafted ? firstUndrafted.name : null;
+              }
 
-              setBestPick(
-                `${bestPlayer.name} (${bestPosition.toLocaleUpperCase()})`,
-              );
+              if (!playerName) {
+                setBestPick("Simulation Error");
+              } else {
+                setBestPick(
+                  `${playerName} (${bestPosition.toLocaleUpperCase()})`,
+                );
+              }
             }
           })
           .catch((error) => {
@@ -401,6 +440,12 @@ export default function DraftIdPage({ params }: { params: { id: string } }) {
               onRetry={() => setSimulationError(false)}
               monteCarloResults={monteCarloResults}
               bestPick={bestPick}
+              costOfWaiting={monteCarloResults.cost_of_waiting}
+              valueNow={monteCarloResults.value_now}
+              valueAtNextPick={monteCarloResults.value_at_next_pick}
+              yourNextPick={monteCarloResults.your_next_pick}
+              recommendedPosition={monteCarloResults.recommended_position}
+              recommendationReason={monteCarloResults.recommendation_reason}
             />
 
             <ScarcityPanel
@@ -420,6 +465,12 @@ export default function DraftIdPage({ params }: { params: { id: string } }) {
               scarcity={scarcityContext}
               canDraft={isSimulatorTurn && !draftPaused && !!bestPick}
               onDraft={handleDraftPlayer}
+              recommendationReason={monteCarloResults.recommendation_reason}
+              costOfWaiting={
+                bestPosition
+                  ? monteCarloResults.cost_of_waiting?.[bestPosition] ?? null
+                  : null
+              }
             />
             <MyRoster league={league} />
           </div>

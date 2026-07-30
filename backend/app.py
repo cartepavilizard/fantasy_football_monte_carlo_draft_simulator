@@ -1395,6 +1395,11 @@ async def sync_historical_drafts_from_espn(
         x=[pick.overall_pick for pick in usable],
         y=[pick.position for pick in usable],
     )
+    # Declaration point: if a league's opponent POSITION model comes from
+    # ESPN league N, its owner tendencies must come from N too. The mapping
+    # endpoint reads this to scope build_team_tendencies / build_generic_tendencies
+    # to the same league.
+    league.espn_league_id = espn_league_id
     await engine.save(league)
     return league
 
@@ -1500,6 +1505,7 @@ async def map_league_owners(
     team_name: str = "",
     profile_key: str = "",
     auto: bool = True,
+    espn_league_id: int = 0,
 ):
     """
     Attach owner tendency profiles to a league's teams. Auto-matching
@@ -1507,6 +1513,11 @@ async def map_league_owners(
     keys and display names; pass team_name+profile_key to assign one
     team manually (manual assignments win). Also precomputes the
     league-generic reach tendencies used for unprofiled teams.
+
+    Owner tendencies are scoped per ESPN league (round buckets are not
+    comparable across league sizes), so every profile read here is keyed
+    to one ESPN league: either the one already stamped on this league by
+    /historical_draft/sync, or ?espn_league_id=N passed on this call.
     """
     league = await get_a_league_by_id(league_id)
     profiles = list(await engine.find(OwnerProfile))
@@ -1521,6 +1532,20 @@ async def map_league_owners(
             detail="Manual mapping needs both team_name and profile_key",
         )
 
+    if espn_league_id:
+        league.espn_league_id = espn_league_id
+    if league.espn_league_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "This league has no ESPN league declared. Owner tendencies are "
+                "scoped per ESPN league (round buckets differ across league sizes), "
+                "so a league must declare which ESPN league its tendencies come from. "
+                "Pass ?espn_league_id=N, or run "
+                "POST /league/{id}/historical_draft/sync first."
+            ),
+        )
+
     by_key = {profile.profile_key: profile for profile in profiles}
     # name -> profile, only when the name is unambiguous across profiles
     name_index = {}
@@ -1533,7 +1558,7 @@ async def map_league_owners(
     def assign(team: Team, profile: OwnerProfile):
         team.owner_profile_key = profile.profile_key
         team.owner_tendencies = build_team_tendencies(
-            profile.metrics, profile.profile_key
+            profile.metrics, profile.profile_key, league.espn_league_id
         )
         matched[team.name] = profile.profile_key
 
@@ -1557,7 +1582,7 @@ async def map_league_owners(
         unmatched = [entry for entry in unmatched if entry["team"] != team_name]
 
     league.generic_tendencies = build_generic_tendencies(
-        [profile.metrics for profile in profiles]
+        [profile.metrics for profile in profiles], league.espn_league_id
     )
     await engine.save(league)
     return {
@@ -1565,6 +1590,7 @@ async def map_league_owners(
         "unmatched": unmatched,
         "generic_tendencies": league.generic_tendencies,
         "profiles_active": app_config.USE_OWNER_PROFILES,
+        "espn_league_id": league.espn_league_id,
     }
 
 

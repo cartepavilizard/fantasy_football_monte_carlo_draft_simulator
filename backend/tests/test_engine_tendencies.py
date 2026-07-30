@@ -85,16 +85,31 @@ def test_candidate_weights_blend_projection_and_adp_order():
 
 
 def test_generic_tendencies_pool_by_sample_size():
+    # Per-league scoping: each profile's reach is read from its
+    # by_league[str(LEAGUE)]['reach'] block; profiles with no block for
+    # that league contribute nothing.
+    def metrics_for_league(n, sd, mean=0.0):
+        return {
+            "by_league": {
+                str(LEAGUE): {
+                    "reach": {"n": n, "sd_delta": sd, "mean_delta": mean}
+                }
+            }
+        }
+
     generic = build_generic_tendencies(
         [
-            {"reach": {"n": 10, "sd_delta": 4.0, "mean_delta": 0.0}},
-            {"reach": {"n": 30, "sd_delta": 8.0, "mean_delta": -2.0}},
-            {"reach": {"n": 0}},
-        ]
+            metrics_for_league(10, 4.0, 0.0),
+            metrics_for_league(30, 8.0, -2.0),
+            metrics_for_league(0, 0.0),
+        ],
+        LEAGUE,
     )
     assert generic["reach_sd"] == approx((10 * 4 + 30 * 8) / 40)
     assert generic["n"] == 40
-    assert build_generic_tendencies([]) == {}
+    assert build_generic_tendencies([], LEAGUE) == {}
+    # a profile with no block for this league contributes nothing
+    assert build_generic_tendencies([{"by_league": {"999": {"reach": {"n": 5}}}}], LEAGUE) == {}
 
 
 def test_reach_sd_prefers_owner_then_generic_then_reference():
@@ -187,18 +202,23 @@ def test_stage2_chalky_owner_concentrates_more_than_reacher(app_module):
 
 # --- owner mapping endpoint -------------------------------------------------------
 
+# Owner tendencies are scoped per ESPN league: build_team_tendencies /
+# build_generic_tendencies read each profile's by_league[str(LEAGUE)] block.
+LEAGUE = 111
 
-def profile(key, names, n=25):
+
+def profile(key, names, n=25, league=LEAGUE):
+    block = {
+        "position_frequency": {"1-2": {"n": n, "shares": {"rb": 0.8, "wr": 0.2}}},
+        "reach": {"n": n, "mean_delta": -1.0, "sd_delta": 7.0},
+        "post_miss": {"n": n, "shift": 0.2},
+    }
     return OwnerProfile(
         profile_key=key,
         display_names=names,
         member_guids=[key],
         total_picks_observed=n,
-        metrics={
-            "position_frequency": {"1-2": {"n": n, "shares": {"rb": 0.8, "wr": 0.2}}},
-            "reach": {"n": n, "mean_delta": -1.0, "sd_delta": 7.0},
-            "post_miss": {"n": n, "shift": 0.2},
-        },
+        metrics={"by_league": {str(league): block}, **block},
     )
 
 
@@ -210,9 +230,17 @@ def save_profiles(app_module, profiles):
 
 
 def test_mapping_requires_profiles(client, league_id):
-    response = client.post(f"/league/{league_id}/owners/map")
+    response = client.post(f"/league/{league_id}/owners/map?espn_league_id={LEAGUE}")
     assert response.status_code == 400
     assert "ingest" in response.json()["detail"]
+
+
+def test_mapping_requires_espn_league_id(client, app_module, league_id):
+    save_profiles(app_module, [profile("{G-J}", ["Julia"])])
+    # No espn_league_id passed and none stamped on the league -> 400, not a guess
+    response = client.post(f"/league/{league_id}/owners/map")
+    assert response.status_code == 400
+    assert "ESPN league" in response.json()["detail"]
 
 
 def test_auto_mapping_matches_names_and_flags_the_rest(
@@ -222,15 +250,19 @@ def test_auto_mapping_matches_names_and_flags_the_rest(
         app_module,
         [profile("{G-J}", ["Julia"]), profile("{G-L}", ["Laura"])],
     )
-    response = client.post(f"/league/{league_id}/owners/map")
+    response = client.post(
+        f"/league/{league_id}/owners/map?espn_league_id={LEAGUE}"
+    )
     assert response.status_code == 200, response.text
     report = response.json()
+    assert report["espn_league_id"] == LEAGUE
     matched_keys = set(report["matched"].values())
     assert matched_keys == {"{G-J}", "{G-L}"}
     assert len(report["unmatched"]) == 12  # 14 teams, 2 matched
     assert report["generic_tendencies"]["reach_sd"] == approx(7.0)
 
     league = client.get(f"/league/{league_id}").json()
+    assert league["espn_league_id"] == LEAGUE
     mapped = [t for t in league["teams"] if t["owner_profile_key"]]
     assert len(mapped) == 2
     assert mapped[0]["owner_tendencies"]["reach"]["n"] == 25
@@ -242,11 +274,13 @@ def test_ambiguous_names_stay_unmatched_until_manual(client, app_module, league_
         app_module,
         [profile("{G-1}", ["Jake"]), profile("{G-2}", ["Jake"])],
     )
-    report = client.post(f"/league/{league_id}/owners/map").json()
+    report = client.post(
+        f"/league/{league_id}/owners/map?espn_league_id={LEAGUE}"
+    ).json()
     assert report["matched"] == {}  # ambiguous "Jake" never auto-assigned
 
     manual = client.post(
-        f"/league/{league_id}/owners/map?team_name=Team 3&profile_key={{G-1}}"
+        f"/league/{league_id}/owners/map?team_name=Team 3&profile_key={{G-1}}&espn_league_id={LEAGUE}"
     )
     assert manual.status_code == 200
     assert manual.json()["matched"] == {"Team 3": "{G-1}"}
@@ -255,18 +289,18 @@ def test_ambiguous_names_stay_unmatched_until_manual(client, app_module, league_
 def test_manual_mapping_validates_inputs(client, app_module, league_id):
     save_profiles(app_module, [profile("{G-1}", ["Someone"])])
     assert (
-        client.post(f"/league/{league_id}/owners/map?team_name=Team 3").status_code
+        client.post(f"/league/{league_id}/owners/map?team_name=Team 3&espn_league_id={LEAGUE}").status_code
         == 400
     )
     assert (
         client.post(
-            f"/league/{league_id}/owners/map?team_name=Nope&profile_key={{G-1}}"
+            f"/league/{league_id}/owners/map?team_name=Nope&profile_key={{G-1}}&espn_league_id={LEAGUE}"
         ).status_code
         == 404
     )
     assert (
         client.post(
-            f"/league/{league_id}/owners/map?team_name=Team 3&profile_key=missing"
+            f"/league/{league_id}/owners/map?team_name=Team 3&profile_key=missing&espn_league_id={LEAGUE}"
         ).status_code
         == 404
     )

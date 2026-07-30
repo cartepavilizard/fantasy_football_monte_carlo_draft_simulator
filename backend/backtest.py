@@ -131,7 +131,7 @@ def evaluate(picks: list, alias_map: Optional[dict] = None, top_k: int = 5) -> d
         profile_training = [pick for pick in picks if id(pick) not in held_out_ids]
         tendencies_by_key = {
             owner.profile_key: build_team_tendencies(
-                owner.metrics, owner.profile_key
+                owner.metrics, owner.profile_key, league_id
             )
             for owner in extract_profiles(profile_training, alias_map=alias_map)
         }

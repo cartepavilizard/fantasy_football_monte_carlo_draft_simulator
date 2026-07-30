@@ -321,6 +321,13 @@ class League(Model):
     logistic_regression_variables: LogisticRegressionVariables = (
         LogisticRegressionVariables()
     )
+    # Records which real ESPN league this league's owner tendencies and
+    # logistic model are drawn from. Set by POST /league/{id}/historical_draft/sync
+    # (the declaration point: opponent position model + owner tendencies come
+    # from the same league) and optionally overridden on /owners/map. None
+    # means "not yet declared" — owner tendencies are scoped per ESPN league,
+    # so without this the mapping endpoint refuses rather than guess.
+    espn_league_id: Union[int, None] = None
 
     @model_validator(mode="before")
     def sort_by_draft_order_and_validate_ready_to_draft(cls, data):

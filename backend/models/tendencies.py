@@ -178,24 +178,50 @@ def candidate_weights(
     ]
 
 
-def build_team_tendencies(metrics: dict, profile_key: str) -> dict:
-    """The subset of an OwnerProfile the engine needs, as a plain dict"""
+def build_team_tendencies(metrics: dict, profile_key: str, espn_league_id) -> dict:
+    """
+    The subset of an OwnerProfile the engine needs, as a plain dict.
+
+    espn_league_id is REQUIRED and has no default on purpose: round buckets
+    are not comparable across league sizes (round 3 is picks 25-36 in a
+    12-team league but 21-30 in a 10-team league), so the engine must take
+    the per-league metric block and never silently fall back to the merged
+    top-level metrics. A missed call site must TypeError rather than blend
+    two leagues' boards. An unknown league returns EMPTY tendencies: an
+    unknown/thin owner contributes nothing, which is the existing
+    'profiles augment, not replace' contract (profile_weight floors to 0).
+    """
+    block = metrics.get("by_league", {}).get(str(espn_league_id), {})
     return {
         "profile_key": profile_key,
-        "position_frequency": metrics.get("position_frequency", {}),
-        "reach": metrics.get("reach", {}),
-        "post_miss": metrics.get("post_miss", {}),
+        "position_frequency": block.get("position_frequency", {}),
+        "reach": block.get("reach", {}),
+        "post_miss": block.get("post_miss", {}),
     }
 
 
-def build_generic_tendencies(metrics_list: List[dict]) -> dict:
+def build_generic_tendencies(metrics_list: List[dict], espn_league_id) -> dict:
     """
     League-generic reach behavior pooled (sample-size weighted) across
     all known owners — the fallback that gives even unprofiled teams
     realistic player-level variance. Pools a per-bucket spread alongside
     the overall reach_sd so an unprofiled owner still gets a
     round-appropriate value rather than a single late-round-saturated one.
+
+    espn_league_id is REQUIRED with no default for the same reason
+    build_team_tendencies requires it: pooling a 12-team league's reach
+    spread into a 10-team league's fallback is the same cross-league
+    contamination at the league level. Each profile's
+    by_league[str(espn_league_id)]['reach'] block is pooled; profiles with
+    no block for that league contribute nothing. An empty pool returns {}
+    exactly as today.
     """
+    league_reach_blocks = []
+    for metrics in metrics_list:
+        block = metrics.get("by_league", {}).get(str(espn_league_id), {})
+        reach = block.get("reach", {})
+        if reach:
+            league_reach_blocks.append(reach)
     weighted_sd = 0.0
     weighted_mean = 0.0
     total_n = 0
@@ -203,8 +229,7 @@ def build_generic_tendencies(metrics_list: List[dict]) -> dict:
         label: {"sd": 0.0, "mean": 0.0, "n": 0}
         for _, _, label in ROUND_BUCKETS
     }
-    for metrics in metrics_list:
-        reach = metrics.get("reach", {})
+    for reach in league_reach_blocks:
         n = reach.get("n", 0)
         if n > 0 and reach.get("sd_delta") is not None:
             weighted_sd += reach["sd_delta"] * n

@@ -233,12 +233,23 @@ def test_recency_weighting_applies_inside_buckets():
 
 
 # --- build_generic_tendencies pools per-bucket ---------------------------------
+#
+# Owner tendencies are scoped per ESPN league, so build_generic_tendencies
+# pools each profile's by_league[str(LEAGUE)]['reach'] block. The metrics
+# dicts below are wrapped in a by_league block to match the real profile
+# shape; the pooling math itself is unchanged, so every assertion below is
+# the same as before the per-league change.
+GENERIC_LEAGUE = 111
+
+
+def _wrap(reach):
+    return {"by_league": {str(GENERIC_LEAGUE): {"reach": reach}}}
 
 
 def test_build_generic_tendencies_pools_per_bucket():
     metrics_list = [
-        {
-            "reach": {
+        _wrap(
+            {
                 "n": 30,
                 "mean_delta": -2.0,
                 "sd_delta": 23.0,
@@ -247,9 +258,9 @@ def test_build_generic_tendencies_pools_per_bucket():
                     "10+": {"n": 24, "mean_delta": -3.0, "sd_delta": 28.0},
                 },
             }
-        },
-        {
-            "reach": {
+        ),
+        _wrap(
+            {
                 "n": 10,
                 "mean_delta": 0.0,
                 "sd_delta": 20.0,
@@ -258,9 +269,9 @@ def test_build_generic_tendencies_pools_per_bucket():
                     "10+": {"n": 6, "mean_delta": -2.0, "sd_delta": 30.0},
                 },
             }
-        },
+        ),
     ]
-    generic = build_generic_tendencies(metrics_list)
+    generic = build_generic_tendencies(metrics_list, GENERIC_LEAGUE)
     # existing keys unchanged
     assert generic["reach_sd"] == approx((30 * 23 + 10 * 20) / 40)
     assert generic["n"] == 40
@@ -275,7 +286,8 @@ def test_build_generic_tendencies_pools_per_bucket():
 
 def test_build_generic_tendencies_keeps_keys_when_no_buckets():
     generic = build_generic_tendencies(
-        [{"reach": {"n": 25, "sd_delta": 7.0, "mean_delta": -1.0}}]
+        [_wrap({"n": 25, "sd_delta": 7.0, "mean_delta": -1.0})],
+        GENERIC_LEAGUE,
     )
     assert "by_bucket" not in generic
     assert generic["reach_sd"] == approx(7.0)

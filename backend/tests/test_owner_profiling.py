@@ -186,3 +186,121 @@ def test_alias_map_merges_guids_into_one_profile():
     assert dave.member_guids == ["G-NEW", "G-OLD"]
     assert dave.espn_league_ids == [1, 2]
     assert dave.total_picks_observed == 2
+
+
+# -- per-league metric blocks -------------------------------------------------
+
+
+_SIX_KEYS = (
+    "position_frequency",
+    "reach",
+    "run_participation",
+    "post_miss",
+    "onesie_timing",
+    "order_verification",
+)
+
+
+def test_two_leagues_get_two_blocks_with_distinct_position_frequency():
+    # League 1 bucket 1-2: rb, rb, wr  -> rb share 2/3
+    # League 2 bucket 1-2: wr, wr, rb  -> rb share 1/3
+    # Merged bucket 1-2:   rb 3, wr 3 -> rb share 1/2
+    picks = [
+        pick(1, 1, league=1, position="rb"),
+        pick(2, 1, league=1, position="rb"),
+        pick(3, 2, league=1, position="wr"),
+        pick(1, 1, league=2, position="wr"),
+        pick(2, 1, league=2, position="wr"),
+        pick(3, 2, league=2, position="rb"),
+    ]
+    profile = profile_of(picks, current_season=2024)
+    by_league = profile.metrics["by_league"]
+
+    assert set(by_league.keys()) == {"1", "2"}
+
+    merged_12 = profile.metrics["position_frequency"]["1-2"]["shares"]
+    l1_12 = by_league["1"]["position_frequency"]["1-2"]["shares"]
+    l2_12 = by_league["2"]["position_frequency"]["1-2"]["shares"]
+
+    assert merged_12["rb"] == approx(0.5)
+    assert l1_12["rb"] == approx(2 / 3, abs=1e-3)
+    assert l2_12["rb"] == approx(1 / 3, abs=1e-3)
+    # The merged shares differ from each league's shares, and the two
+    # leagues differ from each other.
+    assert l1_12 != merged_12
+    assert l2_12 != merged_12
+    assert l1_12 != l2_12
+
+
+def test_by_league_sample_sizes_are_per_league_not_merged():
+    picks = [
+        pick(1, 1, league=1, position="rb"),
+        pick(2, 1, league=1, position="rb"),
+        pick(3, 2, league=1, position="wr"),
+        pick(1, 1, league=2, position="wr"),
+        pick(2, 1, league=2, position="wr"),
+        pick(3, 2, league=2, position="rb"),
+    ]
+    profile = profile_of(picks, current_season=2024)
+    by_league = profile.metrics["by_league"]
+
+    # Per-league bucket n is 3 each, not the merged 6.
+    assert by_league["1"]["position_frequency"]["1-2"]["n"] == 3
+    assert by_league["2"]["position_frequency"]["1-2"]["n"] == 3
+    assert profile.metrics["position_frequency"]["1-2"]["n"] == 6
+
+    # order_verification total_picks is per-league too.
+    assert by_league["1"]["order_verification"]["total_picks"] == 3
+    assert by_league["2"]["order_verification"]["total_picks"] == 3
+
+
+def test_single_league_owner_has_exactly_one_block():
+    picks = [
+        pick(1, 1, league=7, position="rb"),
+        pick(2, 1, league=7, position="wr"),
+    ]
+    profile = profile_of(picks, current_season=2024)
+    assert set(profile.metrics["by_league"].keys()) == {"7"}
+
+
+def test_by_league_block_respects_verified_gating():
+    # League 1: a verified season with a reach. League 2: an unverified
+    # season whose fabricated overall_pick must NOT feed order metrics.
+    picks = [
+        pick(1, 1, league=1, position="rb", adp=8.0, verified=True),
+        pick(1, 1, league=2, position="qb", adp=30.0, verified=False),
+        pick(2, 1, league=2, position="te", adp=40.0, verified=False),
+        pick(3, 2, league=2, position="rb", adp=50.0, verified=False),
+    ]
+    profile = profile_of(picks, current_season=2024)
+    block2 = profile.metrics["by_league"]["2"]
+
+    # Order-dependent metrics gated out: no verified events in league 2.
+    assert block2["reach"]["n"] == 0
+    assert block2["run_participation"]["n"] == 0
+    assert block2["post_miss"]["n"] == 0
+
+    # Round-bucketed metrics still see league 2's events.
+    assert block2["position_frequency"]["1-2"]["n"] == 3
+
+    # And the per-league order_verification block reflects it.
+    assert block2["order_verification"]["verified_picks"] == 0
+    assert block2["order_verification"]["total_picks"] == 3
+    assert block2["order_verification"]["verified_seasons"] == []
+    assert block2["order_verification"]["unverified_seasons"] == [2024]
+
+
+def test_single_league_block_matches_top_level_byte_for_byte():
+    # For an owner whose picks all come from one league, the per-league
+    # block is computed over the same events as the merged top level, so
+    # the six metric keys must be byte-for-byte identical -- this is the
+    # regression guard that the refactor did not change the merged view.
+    picks = [
+        pick(1, 1, league=5, position="rb", adp=8.0),
+        pick(2, 1, league=5, position="wr"),
+        pick(6, 3, league=5, position="te", adp=12.0),
+    ]
+    profile = profile_of(picks, current_season=2024)
+
+    top_level_six = {key: profile.metrics[key] for key in _SIX_KEYS}
+    assert profile.metrics["by_league"]["5"] == top_level_six

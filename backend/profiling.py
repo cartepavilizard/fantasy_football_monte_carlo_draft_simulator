@@ -19,6 +19,11 @@ Ground rules from the architecture review:
   league-seasons with a verified draft order; commissioner-entered offline
   drafts carry a fabricated overall_pick that is noise for order-based math
   (round numbers survive, so round-bucketed metrics still use every season)
+- metrics are additionally emitted per ESPN league (metrics['by_league'])
+  because the round buckets are not comparable across league sizes: round 3
+  is overall picks 25-36 in a 12-team league but 21-30 in a 10-team league,
+  so blending leagues answers "what does this owner take in round 3" with
+  two different talent pools averaged together
 """
 from datetime import datetime
 import math
@@ -291,6 +296,39 @@ def _onesie_timing(events, weight_of) -> dict:
     return timing
 
 
+def _metric_block(events, weight_of) -> dict:
+    """
+    The full six-key metric set computed over a single event population
+    (either an owner's merged events or the subset from one ESPN league).
+    Reproduces the verified-order gating the top level uses: round-bucketed
+    metrics (position_frequency, onesie_timing) see every event, while the
+    order-dependent metrics (reach, run_participation, post_miss) see only
+    the order-verified events -- a commissioner-entered season's fabricated
+    overall_pick is noise for order math, but its round numbers survive.
+    post_miss is handed the frequency computed from the verified events
+    alone, exactly as the merged view does.
+    """
+    verified_events = [event for event in events if event["order_verified"]]
+    verified_frequency = _position_frequency(verified_events, weight_of)
+    verified_seasons = sorted({event["season"] for event in verified_events})
+    unverified_seasons = sorted(
+        {event["season"] for event in events} - set(verified_seasons)
+    )
+    return {
+        "position_frequency": _position_frequency(events, weight_of),
+        "reach": _reach_stats(verified_events, weight_of),
+        "run_participation": _run_participation(verified_events, weight_of),
+        "post_miss": _post_miss(verified_events, verified_frequency, weight_of),
+        "onesie_timing": _onesie_timing(events, weight_of),
+        "order_verification": {
+            "verified_picks": len(verified_events),
+            "total_picks": len(events),
+            "verified_seasons": verified_seasons,
+            "unverified_seasons": unverified_seasons,
+        },
+    }
+
+
 def extract_profiles(
     picks: List[HistoricalPick],
     alias_map: Optional[Dict[str, str]] = None,
@@ -327,14 +365,16 @@ def extract_profiles(
 
     profiles = []
     for owner in owners.values():
-        frequency = _position_frequency(owner.events, weight_of)
-        verified_events = [event for event in owner.events if event["order_verified"]]
-        verified_frequency = _position_frequency(verified_events, weight_of)
-        verified_seasons = sorted({event["season"] for event in verified_events})
-        unverified_seasons = sorted(
-            {event["season"] for event in owner.events}
-            - set(verified_seasons)
-        )
+        metrics = _metric_block(owner.events, weight_of)
+        by_league: Dict[str, dict] = {}
+        for league_id in sorted({event["league_id"] for event in owner.events}):
+            league_events = [
+                event for event in owner.events if event["league_id"] == league_id
+            ]
+            by_league[str(league_id)] = _metric_block(league_events, weight_of)
+        metrics["recency_decay"] = RECENCY_DECAY
+        metrics["reference_season"] = current_season
+        metrics["by_league"] = by_league
         profiles.append(
             OwnerProfile(
                 profile_key=owner.profile_key,
@@ -343,25 +383,7 @@ def extract_profiles(
                 espn_league_ids=sorted(owner.league_ids),
                 seasons_observed=sorted(owner.seasons),
                 total_picks_observed=len(owner.events),
-                metrics={
-                    "position_frequency": frequency,
-                    "reach": _reach_stats(verified_events, weight_of),
-                    "run_participation": _run_participation(
-                        verified_events, weight_of
-                    ),
-                    "post_miss": _post_miss(
-                        verified_events, verified_frequency, weight_of
-                    ),
-                    "onesie_timing": _onesie_timing(owner.events, weight_of),
-                    "recency_decay": RECENCY_DECAY,
-                    "reference_season": current_season,
-                    "order_verification": {
-                        "verified_picks": len(verified_events),
-                        "total_picks": len(owner.events),
-                        "verified_seasons": verified_seasons,
-                        "unverified_seasons": unverified_seasons,
-                    },
-                },
+                metrics=metrics,
                 generated_at=datetime.now(),
             )
         )

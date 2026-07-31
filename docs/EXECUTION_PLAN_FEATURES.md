@@ -242,6 +242,155 @@ a self-check that its `n` must come out to 673.
 
 ---
 
+## Phase H — External Projection Aggregation (Aug, draft-gated)
+
+Came out of a 2026-07-30 research note proposing **ffanalytics** (R
+package) as a multi-source projection/ADP aggregator. The note's premise —
+"player pool, projections and ADP are 100% ESPN-sourced, no external
+aggregation exists" — was **verified false on 2026-07-31**: the Phase 0
+aggregation layer has been live since before this plan started. What the
+note actually identified, once cross-referenced against the code, is a
+narrower and better-defined defect. Read this preamble before working any
+H row.
+
+### What already exists (do not rebuild)
+
+`backend/data_sources/` is a complete multi-source subsystem: five pull
+adapters (`sleeper`, `ffc`, `espn_rankings`, `fantasypros`, `yahoo`), one
+push/file-drop source (`udk`), per-position z-score blending
+(`blend.py`), orchestration with last-known-good fallback (`service.py`),
+`RankingsScheduler`, and the `/rankings/*` endpoints. `Player` already
+carries `adp` / `consensus_rank` / `tier` / `source_values`.
+
+It is live in Mongo, not merely built. Verified 2026-07-31:
+
+```
+blended_rankings: 2026 ppr, sources_used = [sleeper, ffc, espn, fantasypros], 769 records
+league "Never Leaving Mahomes 2026": Trey McBride adp 22.81 tier 3
+  source_values {sleeper: 2.98, ffc: 1.88, espn: 2.83, fantasypros: 1.94}
+```
+
+### The actual defect
+
+Measured field coverage in the 2026-07-28 batches:
+
+| source | records | resolved | **projection** | adp | rank | tier |
+| --- | --- | --- | --- | --- | --- | --- |
+| sleeper | 3220 | 1020 | **635** | 3220 | 0 | 0 |
+| ffc | 233 | 233 | **0** | 233 | 0 | 0 |
+| espn | 1026 | 1026 | **567** | 1026 | 1025 | 0 |
+| fantasypros | 508 | 499 | **0** | 0 | 508 | 508 |
+
+The ordinal/ADP axis has four sources. **The projection axis has two.**
+And `POST /league/{id}/player/sync` (app.py) materializes
+`blended_projection` into `PlayerPoints.projected_points` — where
+`blended_projection` is a plain unweighted `fmean()` of raw point totals
+(`blend.py`), *not* the z-scored `blended_value`.
+
+> **The number the entire simulator runs on — every projection, tier
+> assignment, `position_max_points` ceiling and `value_over_wait` verdict
+> — is an unweighted raw average of two sources, one of which is ESPN.
+> The rigorous four-source consensus is carried as metadata and never
+> drives the engine.** `RANKING_BLEND_WEIGHTS` does not reach it. Raw
+> point totals from sources with different scoring assumptions are
+> averaged without normalization. 97 of 769 blend records are dropped at
+> sync for having no projection at all.
+
+That is H2, it is independent of R and of ffanalytics, and it is the
+highest-value row in this phase.
+
+### ESPN-only assumptions — the audit the note asked for
+
+| Area | ESPN-only? | Finding |
+| --- | --- | --- |
+| Player pool / projections / ADP | **No** | Four-source blend, live |
+| Value model, tiers, scarcity, `value_over_wait` | **No** | Read `Player.points/adp/tier`; source-agnostic by construction |
+| `HistoricalPick` / owner profiling | **Yes, deliberately** | "ESPN-exclusive per Addendum A". Correct — it is *your leagues'* draft history. Not a target. |
+| In-season injury / roster status | **Mostly** | `espn_league.py` supplies `injury_status`; D2 already added nflverse practice reports as a second signal. The note's proposed "ESPN stays the injury source" split is already reality. |
+| Canonical naming | **ESPN-anchored** | `ANCHOR_PRIORITY = ["espn", "sleeper", "ffc"]`. Intentional (drafts are on ESPN) and load-bearing: Sleeper resolves only 1020/3220 because the anchor namespace is ESPN's 1026. |
+
+**The integration risk is calibration, not architecture.** Adding a
+projection source changes `projected_points` → re-ranks players →
+reassigns `position_tier` → changes `position_max_points` → changes the
+`randomized_points()` ceiling → changes every Monte Carlo outcome and
+every `value_over_wait` verdict. A re-sync is a global recalibration of
+the engine. Per this project's own verification philosophy, that must be
+measured before it is adopted (H5), not after.
+
+### The SOS follow-on is already built
+
+The note flags strength-of-schedule + positional defensive rankings as
+the most valuable add-on. **C2 (`matchup_strength.py`) and C5
+(`playoff_sos.py`) already ship both**, computed from synced data rather
+than bought. The only genuine gap is that both are structurally neutral
+before week 1 — there is no *draft-time* SOS. That is H8, it is narrow,
+and preseason SOS is weak signal. **Blocker if pursued:**
+`inseason_api.py` enforces cached-only reads structurally (a test fails
+the build if its import closure ever imports `data_sources`), so any
+external SOS must land in Mongo via ingestion and be read from there.
+
+**Fantasy Nerds: dropped.** SOS is built, depth-chart inference was
+deliberately rejected by C7, DFS values are irrelevant here, and it is
+paid.
+
+### Delivery approach
+
+**File-drop, not a new pull adapter.** `udk` already established the
+pattern: an offline producer writes a CSV, `POST /rankings/udk` ingests
+it, names resolve against the stored anchor, the blend regenerates. That
+turns "build an R integration subsystem" into "generalize one push source
+and write an R script" — no R runtime inside the backend, no new fetch
+surface, no new scheduler failure mode.
+
+### Ringer routing
+
+Ringer has already shipped work on this repo (GLM 5.2 via OpenCode,
+direct-repo mode, ownership-gated). Reusable harness:
+`/mnt/c/ringer-jobs/ff-finish/checks/check_task_generic.sh`
+(ownership → required identifiers → executed `behavior_*.py` → pytest →
+optional tsc → auto-commit on pass), invoking `venv312` through
+`cmd.exe` from WSL.
+
+**A row is Ringer-ready iff a `behavior_*.py` script can prove it.** The
+scoreboard for this user (`ringer.py models`, 70 rows): GLM 5.2 is
+**proven** on code-fix (100% first-try, n=7) and code-review (80%, n=5),
+**probation** on code-feature (53% first-try / 80% pass, n=30). Design
+decisions and numeric judgment stay with the orchestrator; typing and
+verification go to workers.
+
+| # | Task | Routing | Ringer | Est. | Depends |
+| --- | --- | --- | --- | --- | --- |
+| H1 | **Generalize the push path.** `PUSH_SOURCES` is hardcoded `["udk"]` and the ingest endpoint is UDK-specific. Make push sources registrable so `ffanalytics` (and future drops) ride the same ingest/resolve/blend path. Purely enabling. | [Sonnet] | **✅ Yes** — `task_type: code-feature`, GLM via opencode. Behavior script registers a synthetic push source, ingests a fixture CSV, asserts it appears in `sources_used`. | 0.5d | — |
+| H2 | **Fix `blended_projection`.** *Do this regardless of ffanalytics.* Define and implement the contract: weighted mean honoring `RANKING_BLEND_WEIGHTS`, outlier handling, and whether to reconstruct projections for the 97 projection-less records from `blended_value`. **Highest-value row in the phase; needs no R.** | [Opus 5] → then [Sonnet] | **✅ Yes, after the spec.** Classic [SPLIT]: orchestrator settles the contract (a numeric-methodology decision, not typing), Ringer implements + tests. Behavior script must assert weights actually move the output — a no-movement result is a failure signal. | 1d | — |
+| H3 | **R toolchain spike, timeboxed.** Install R + ffanalytics, run one seasonal `scrape_data()`, confirm usable output. **Kill-switch: >1 day → stop, go to H6.** | [human] | **❌ No** — interactive Windows installers and environment mutation on the host. Not a worker task. If it proceeds, install R **into WSL** so H4's check can execute `Rscript` the way the harness executes `venv312`. | 0.5–1d | — |
+| H4 | **ffanalytics producer script.** `backend/scripts/ffanalytics_export.R` → CSV in H1's schema. Scored to *your* league settings, not generic PPR — the one thing no current source does. | [Sonnet] | **✅ Conditional on H3.** Check must actually run `Rscript` and validate the CSV against H1's schema; if R is unreachable from the check, this is unverifiable and must not run under Ringer. | 1d | H1, H3 |
+| H5 | **Measure before adopting.** Rebuild the blend with and without the new source; diff `projected_points`, tier assignments, `position_max_points`, and `value_over_wait` verdicts on the live Mahomes board. Gate adoption on the result. | [Opus 5] | **✅ Yes** — `research-with-proof` pattern; the behavior script *is* the measurement. Worker produces the numbers, **orchestrator reads them and decides.** Never let the worker that builds the integration also rule on whether it helped. | 1d | H2, H4 |
+| H6 | **Fallback: native Python projection adapters.** If H3 fails, skip R entirely — write `BaseSourceAdapter` subclasses for NumberFire / CBS / FFToday. Less coverage than ffanalytics, zero new runtime, perfect fit for the existing framework. | [Sonnet] | **✅ Best fan-out in the phase** — three independent adapters over disjoint files: textbook `fix-swarm` / parallel lanes, one worker each. Good candidate for an exploration lane on one of the three. | 1.5d | H1 |
+| H7 | **FantasyPros expert-disagreement signal.** *Optional.* Extend the existing adapter to capture std-dev across experts → an uncertainty field feeding tier confidence and the near-tie margin. Genuinely new signal. | [Opus 5] | **✅ Yes** — single-adapter extension, `task_type: code-feature`. | 1d | — |
+| H8 | **Preseason SOS.** *Optional, defer.* The only gap C2/C5 don't cover. Must land in Mongo via ingestion — see the structural cached-only blocker above. | [Sonnet] | **✅ Yes** — the existing import-graph test is already the guard rail; the behavior script asserts it still holds. | 1d | — |
+| ~~H9~~ | ~~Fantasy Nerds integration~~ | — | **Dropped** — redundant and paid. See above. | — | — |
+
+**Sequencing against the calendar.** It is 2026-07-31; drafts are late
+August; G6/G7/G8, D4, the C7 review and the mock-draft dry run all
+compete. H2 is worth doing pre-draft on its own merits — a real defect in
+the engine's primary input, one day, no R. H1 is cheap and unblocks
+everything. H4/H5 only ship pre-draft if H3 comes in clean by **~Aug 10**;
+otherwise defer the whole ffanalytics arm to in-season, when a projection
+refresh is far lower-stakes than a recalibration on draft eve.
+
+**Interaction with G7.** G7 is deciding the fate of the stage-1 position
+blend on measured numbers. Changing the projection pool mid-investigation
+muddies its before/after comparisons. Sequence H5 and G7; do not run them
+in parallel.
+
+**The failure mode to guard against** is not "the integration doesn't
+work." It is "the integration works, silently shifts every projection a
+few percent, reshuffles tier boundaries, and the draft runs off it
+without anyone diffing." That is precisely the class of bug G3 and G5
+caught. H5 is not optional polish.
+
+---
+
 ## Outstanding operational items (verified 2026-07-31)
 
 Drafts are ~late August and the season opens early September, so items

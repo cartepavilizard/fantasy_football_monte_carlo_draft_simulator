@@ -591,10 +591,19 @@ Drafts are ~late August and the season opens early September, so items
    so the next `POST /league/{id}/player/sync` silently re-tiers 98 of 671
    players — with the projections completely unchanged. Note 12 matches
    Skunkweed (12 teams) exactly and 16 matched neither league (Mahomes is
-   10), so the drift arguably improved things by accident. But the cutoffs
-   are a **global**, and no per-league override exists — a single
-   `ROSTER_SIZE` cannot be right for a 10-team and a 12-team league at the
-   same time. Reproduce with `backend/scripts/h5_adoption_gate.py`.
+   10). **The deeper problem, found on review: the name means two different
+   things.** `config.ROSTER_SIZE` (global, 12) is used as a **team count** —
+   `position.py`'s own comment says "14 in a 14-team league" and `qb1 =
+   QB_SIZE * ROSTER_SIZE` is "1 starting QB x N teams". But
+   `League.roster_size` (per league, stored **15** on both leagues, equal to
+   their `round_size`) means **players per team** — and nothing reads it.
+   So the quantity that should vary per league already does, in a field the
+   tier code ignores; and `16` is close to a 15-man roster and nowhere near
+   either team count, which is probably how the drift happened. The real fix
+   is to derive tier cutoffs from `len(league.teams)` at sync time rather
+   than from an env-read global. Reproduce with
+   `backend/scripts/h5_adoption_gate.py`; full options in
+   `docs/specs/H5_ADOPTION_GATE.md`.
 
 ---
 

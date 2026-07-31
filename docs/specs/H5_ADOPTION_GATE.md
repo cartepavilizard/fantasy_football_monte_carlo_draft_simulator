@@ -109,15 +109,44 @@ documents, and no branch checkout rolls that back. `mongodump` the
 The sync bakes whatever value is live into every tier label, so this has to
 be decided first or it gets decided by accident.
 
-- `ROSTER_SIZE` means **number of teams**, and it is a single global.
-- The live tiers were cut under **16**, which matches neither league.
-- Today's default is **12**: exactly right for Skunkweed, still wrong for
-  Mahomes (10 teams).
+**The name means two different things in this codebase, and that is the
+actual bug.** Verified 2026-07-31:
 
-So the drift arguably improved correctness by accident. But no per-league
-override exists, and one global cannot be right for a 10-team and a 12-team
-league simultaneously. Options: accept 12, set an explicit value in
-`backend/.env`, or treat per-league tier cutoffs as a new row.
+| symbol | value | what it really means | who reads it |
+| --- | --- | --- | --- |
+| `config.ROSTER_SIZE` (global) | 12 | **number of teams** | `PositionTiers` — every tier cutoff |
+| `League.roster_size` (per league) | 15 | **players per team** | **nobody** — written at creation, never read |
+
+Evidence for the global being team count: `position.py`'s own comment
+(`# 14 in a 14-team league`) and the arithmetic — `qb1 = QB_SIZE *
+ROSTER_SIZE` is "1 starting QB x N teams", i.e. the number of league-wide
+startable QBs, which is the standard definition of a QB1. Evidence for the
+per-league field being players-per-team: both live leagues store
+`roster_size=15`, exactly equal to their `round_size=15`, while having 12
+and 10 teams respectively.
+
+So the answer to "shouldn't that vary per league?" is **yes, and it does —
+in a field the tier code never looks at.** Mahomes is 10 teams, Skunkweed is
+12; one global cannot be right for both.
+
+This also gives the most likely explanation for the drift itself: `16` is
+close to a 15-man roster and nowhere near either league's team count, so
+whoever set it was probably reading the name literally. A name that invites
+the wrong value is worse than a wrong value.
+
+Options, best first:
+
+1. **Derive the cutoffs from `len(league.teams)` at sync time** instead of
+   from a module-level global read from the environment at import. This is
+   the real fix: it is per-league by construction and deletes the ambiguity.
+   `PositionTiers` would take a team count argument rather than closing over
+   `ROSTER_SIZE`.
+2. Rename the global to `LEAGUE_TEAM_COUNT` (and `League.roster_size` to
+   `roster_slots`, or delete it — it is unread) and set it explicitly in
+   `backend/.env`. Cheap, keeps the global, still wrong for one of the two
+   leagues.
+3. Accept 12 and move on. Correct for Skunkweed, wrong for Mahomes, and the
+   next person to read the name will re-introduce the drift.
 
 ### 3. Wire ffanalytics in permanently?
 

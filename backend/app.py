@@ -1595,21 +1595,46 @@ async def map_league_owners(
 
 
 @app.post("/owners/backtest", tags=["owners"])
-async def run_owner_backtest(top_k: int = 5):
+async def run_owner_backtest(
+    top_k: int = 5,
+    verified_order_only: bool = True,
+    espn_league_ids: str = "",
+):
     """
     Leave-one-season-out replay of every ingested draft: predict each
     real pick with the generic engine and the profile engine, and
     compare position hit rate and player-in-top-K rate. The Phase 4
     ship gate: profiles should only be trusted if this shows a lift.
+
+    The gate scores only verified-order drafts by default
+    (verified_order_only=True): two of the three ingested ESPN leagues
+    were drafted offline and the commissioner typed the finished rosters
+    in afterwards, so ESPN's overall_pick on those rows is data-entry
+    order, not selection order. Predicting position from overall_pick on
+    that fabricated order would measure the commissioner's typing, not
+    owner behavior, so unverified picks are dropped before anything
+    else. Pass verified_order_only=False to admit them (use only when
+    you know the board is real). espn_league_ids (comma-separated ESPN
+    league ids) restricts which leagues are EVALUATED; training still
+    draws only on each evaluated league's own other seasons, so the
+    training logic is unchanged.
     """
     picks = list(await engine.find(HistoricalPick))
     if not picks:
         raise HTTPException(
             status_code=400, detail="No historical picks ingested yet"
         )
+    evaluate_leagues = [
+        int(id_.strip()) for id_ in espn_league_ids.split(",") if id_.strip()
+    ] or None
     alias_map = await profiling.load_alias_map(engine)
     return await run_in_threadpool(
-        backtest_module.evaluate, picks, alias_map, top_k
+        backtest_module.evaluate,
+        picks,
+        alias_map,
+        top_k,
+        verified_order_only,
+        evaluate_leagues,
     )
 
 

@@ -14,8 +14,22 @@ Scored on position hit rate and player-in-top-K rate (top K remaining
 players by that season's historical ADP at the predicted position).
 Roster-need zeroing is omitted from BOTH arms (historical roster rules
 are unknowable), so the comparison stays fair.
+
+DRAFT-ORDER GATING: the regression predicts position from overall_pick,
+so it only measures drafting behavior when overall_pick reflects real
+selection order. Of the ingested ESPN leagues, only one drafted online;
+the other two were drafted offline and the commissioner typed the
+finished rosters in afterwards, so ESPN's overall_pick on those rows is
+DATA-ENTRY order, not selection order (verified against a real 2025
+draft-board: 0 of 173 picks agreed on round+slot). Training or scoring
+on those picks would measure the commissioner's typing, not owner
+behavior, so by default evaluate drops every pick whose
+HistoricalPick.draft_order_verified is falsy BEFORE season grouping,
+regression training, profile extraction, and the board walk. This is
+the same gate profiling.py applies to its order-dependent metrics; the
+safe default is the one that refuses to treat fabricated order as real.
 """
-from typing import Dict, List, Optional
+from typing import Dict, Iterable, List, Optional
 
 from sklearn.linear_model import LogisticRegression
 
@@ -89,24 +103,57 @@ class _Arm:
         }
 
 
-def evaluate(picks: list, alias_map: Optional[dict] = None, top_k: int = 5) -> dict:
+def evaluate(
+    picks: list,
+    alias_map: Optional[dict] = None,
+    top_k: int = 5,
+    verified_order_only: bool = True,
+    evaluate_leagues: Optional[Iterable[int]] = None,
+) -> dict:
     """Pure & sync: HistoricalPick rows -> generic vs profile comparison"""
     alias_map = alias_map or {}
+    picks_supplied = len(picks)
+
+    # Draft-order gate: drop commissioner-entered (unverified) picks
+    # BEFORE anything else — season grouping, regression training,
+    # extract_profiles, and the board walk all run on real selection
+    # order only. See the module docstring for why this is the default.
+    if verified_order_only:
+        filtered = [pick for pick in picks if pick.draft_order_verified]
+    else:
+        filtered = list(picks)
+    picks_used = len(filtered)
+    picks_dropped_unverified = picks_supplied - picks_used
+
+    selected_leagues = (
+        set(evaluate_leagues) if evaluate_leagues is not None else None
+    )
+
     seasons: Dict[tuple, list] = {}
-    for pick in picks:
+    for pick in filtered:
         seasons.setdefault((pick.espn_league_id, pick.season), []).append(pick)
 
     generic, profile = _Arm(), _Arm()
     evaluated, skipped = [], []
 
     for (league_id, season), season_picks in sorted(seasons.items()):
+        if selected_leagues is not None and league_id not in selected_leagues:
+            skipped.append(
+                {
+                    "league": league_id,
+                    "season": season,
+                    "why": "league not selected",
+                }
+            )
+            continue
+
         if any(pick.bid_amount for pick in season_picks):
             skipped.append({"league": league_id, "season": season, "why": "auction"})
             continue
 
         training = [
             pick
-            for pick in picks
+            for pick in filtered
             if pick.espn_league_id == league_id
             and pick.season != season
             and pick.position
@@ -128,7 +175,9 @@ def evaluate(picks: list, alias_map: Optional[dict] = None, top_k: int = 5) -> d
 
         # Profiles from everything except the held-out league-season
         held_out_ids = {id(pick) for pick in season_picks}
-        profile_training = [pick for pick in picks if id(pick) not in held_out_ids]
+        profile_training = [
+            pick for pick in filtered if id(pick) not in held_out_ids
+        ]
         tendencies_by_key = {
             owner.profile_key: build_team_tendencies(
                 owner.metrics, owner.profile_key, league_id
@@ -195,6 +244,7 @@ def evaluate(picks: list, alias_map: Optional[dict] = None, top_k: int = 5) -> d
             - generic_report["position_hit_rate"],
             4,
         )
+    leagues_evaluated = sorted({entry["league"] for entry in evaluated})
     return {
         "seasons_evaluated": evaluated,
         "seasons_skipped": skipped,
@@ -202,4 +252,11 @@ def evaluate(picks: list, alias_map: Optional[dict] = None, top_k: int = 5) -> d
         "generic": generic_report,
         "profile": profile_report,
         "position_hit_rate_improvement": improvement,
+        "order_verification": {
+            "verified_order_only": verified_order_only,
+            "picks_supplied": picks_supplied,
+            "picks_used": picks_used,
+            "picks_dropped_unverified": picks_dropped_unverified,
+            "leagues_evaluated": leagues_evaluated,
+        },
     }

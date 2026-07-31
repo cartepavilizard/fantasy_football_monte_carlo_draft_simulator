@@ -93,7 +93,7 @@ is the first second opinion he has had.
 
 ## The three questions
 
-### 1. Run the sync?
+### 1. Run the sync?  — *blocked on H11, see question 2*
 
 `POST /league/{id}/player/sync` against the real draft leagues is outside a
 session's authority without being asked. If you want it run, say so
@@ -136,7 +136,9 @@ the wrong value is worse than a wrong value.
 
 Options, best first:
 
-1. **Derive the cutoffs from `len(league.teams)` at sync time** instead of
+1. **Derive the cutoffs from `len(league.teams)` at sync time** — tracked
+   as **H11**, and it **blocks question 1**: run it before the sync, or the
+   sync bakes the wrong cutoffs in permanently. instead of
    from a module-level global read from the environment at import. This is
    the real fix: it is per-league by construction and deletes the ambiguity.
    `PositionTiers` would take a team count argument rather than closing over

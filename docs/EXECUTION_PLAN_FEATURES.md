@@ -356,6 +356,13 @@ turns "build an R integration subsystem" into "generalize one push source
 and write an R script" — no R runtime inside the backend, no new fetch
 surface, no new scheduler failure mode.
 
+### Branching
+
+One branch per row, cut from `main` before the work starts and merged back
+when the row is done — see the Branching section in `CLAUDE.md` for naming
+and for why the Ringer harness needs the branch cut up front. H2 landed on
+`main` before this rule was restored; that history stays as-is.
+
 ### Ringer routing
 
 Ringer has already shipped work on this repo (GLM 5.2 via OpenCode,

@@ -16,10 +16,42 @@
 ## Commands
 
 - Tests: `cd backend && venv312/Scripts/python.exe -m pytest -q` —
-  currently **682 passing**.
+  currently **688 passing**.
 - Servers: `.claude/launch.json` defines `backend` (uvicorn, port 8000) and
   `frontend` (npm run dev, port 3000). Start them with the Claude Code
   `preview_start` tool **by name**, not by hand.
+
+## Branching — one branch per plan row
+
+**Never work a plan row directly on `main`.** Cut a branch named after the
+row before you touch anything:
+
+```
+git checkout main && git pull && git checkout -b h1-push-sources
+```
+
+Naming: `<row-id-lowercase>-<short-slug>` (`h1-push-sources`,
+`h5-adoption-measurement`). Merge to `main` when the row is done and you
+are satisfied; delete the branch after.
+
+- **The Ringer harness follows you.** `check_task_generic.sh` runs
+  `cd "$REPO"; git commit` on whatever branch is checked out — it does not
+  hardcode `main`. Branch first and its auto-commits land on your branch.
+- **Cut the branch BEFORE the run.** The harness's ownership gate reads
+  `git status --porcelain` and fails on a dirty tree, so switching branches
+  mid-run is not an option.
+- Phases A–E used branch + PR (PRs #7–#14). Phases F/G/H drifted onto
+  `main` when the direct-repo harness arrived — that was convenience, not a
+  decision, and it is reverted by this rule. H2's commits (`a18d957`,
+  `4cc6c00`) are on `main` and stay there; do not rewrite that history.
+
+**Git protects the code, not the data.** MongoDB has no branches. Anything
+that runs `POST /league/{id}/player/sync` — or otherwise writes league
+documents — mutates `projected_points`, `position_tier` and
+`position_max_points` in place, and checking out a different branch will
+NOT roll that back. Before adopting an engine recalibration, copy the
+league document or `mongodump` the collection. Branching is not a
+substitute.
 
 ## Gotchas that waste time if you don't know them
 

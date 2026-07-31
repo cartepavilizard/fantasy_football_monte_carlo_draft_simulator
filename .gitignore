@@ -77,3 +77,6 @@ personal_league_teams.csv
 
 # Raw-response cache for external data sources
 .data_source_cache/
+# H5: the ffanalytics producer output is a regenerable data artifact, not source.
+# Reproduce with backend/scripts/ffanalytics_export.R (see the H5 plan row).
+backend/scripts/ffanalytics_export.csv

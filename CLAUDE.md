@@ -16,7 +16,7 @@
 ## Commands
 
 - Tests: `cd backend && venv312/Scripts/python.exe -m pytest -q` —
-  currently **688 passing**.
+  currently **690 passing**. Update this number when it changes.
 - Servers: `.claude/launch.json` defines `backend` (uvicorn, port 8000) and
   `frontend` (npm run dev, port 3000). Start them with the Claude Code
   `preview_start` tool **by name**, not by hand.
@@ -93,6 +93,17 @@ substitute.
 - `docs/EXECUTION_PLAN_FEATURES.md` is the **source of truth for what to
   work on next**. Every task carries a status stamp. Update that file when
   work lands.
+- **Read its `## Session Protocol` section before starting any plan row.**
+  It is normative and cross-cutting: how to pick the next row (including
+  why a `[human]` row blocks the queue instead of being routed around),
+  what to do when the Ringer harness is unreachable, authority limits
+  (no push / no branch deletion / no league re-sync without being asked),
+  the five-step session closeout, and the contract for the handoff prompt
+  a session must print before it finishes.
+- **A kickoff prompt never overrides that section.** Prompts get truncated
+  and paraphrased in transit; the repo does not. If a prompt and the
+  Session Protocol disagree, follow the protocol and say so in the
+  closeout. Do not reconstruct a missing protocol from memory — read it.
 - `docs/specs/` holds the design specs individual plan rows reference.
   `docs/BRAINSTORM.md` is the feature reference. `EXECUTION_PLAN.md` at the
   root is a **historical** architecture-audit plan from 2026-07-03 —

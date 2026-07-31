@@ -69,6 +69,137 @@ landed its interface.
 
 ---
 
+## Session Protocol
+
+**This section is normative and applies to every phase, not just the one
+you are working.** It exists here, in the repo, on purpose: a protocol
+that lives only inside a pasted prompt has to survive being copied intact
+through every hop forever, and it will not. If a kickoff prompt and this
+section disagree, **this section wins** — say so in your closeout.
+
+### Picking the next row
+
+Work the row the plan says is next; do not re-derive the order from
+scratch. The rule, in order:
+
+1. **A row already in flight beats everything.** `git branch --list` — an
+   unmerged row branch means a previous session stalled there. Resume it.
+2. **Honor `Depends` AND any exclusivity gate.** A row is eligible only
+   when every dependency is `Done` and no gate in its `Depends` cell is
+   unresolved. `H1 + H3-failed` means H6 is ineligible until H3 has
+   actually run AND failed — an unrun H3 is an unresolved gate, not a
+   green light.
+3. **A `[human]` row BLOCKS THE QUEUE — do not route around it.** If the
+   next row is `[human]`, that is the answer: hand it back to the repo
+   owner with what they need to run it, and stop. Skipping a `[human]`
+   row to find the next Claude-actionable one silently pre-empts a
+   decision nobody made. This has already gone wrong once: after H1, a
+   session skipped the unrun `[human]` H3 and routed to H6 — the fallback
+   arm that is only valid *if H3 fails*.
+4. **Never reorder without saying why.** "Unblocked" is not "next". State
+   which one you mean.
+
+### When the Ringer harness is unreachable
+
+Rows marked Ringer-routed assume WSL and
+`/mnt/c/ringer-jobs/ff-finish/checks/`. A session with only Git Bash
+cannot reach them. That is a legitimate reason to implement directly —
+but it does not lower the evidence bar:
+
+- **Say so explicitly**, in the closeout note and the plan row.
+- **Still write an executed behavior check** that proves a real number
+  moved, and quote the before/after. Ringer is how the check gets run,
+  not why it is required.
+- Do not silently downgrade a `research-with-proof` or measurement row
+  (H5) to hand-verification. If the measurement cannot be executed,
+  stop and hand back rather than self-certifying.
+
+### Authority limits
+
+Without the repo owner asking, in the same session: do **not** `git push`,
+do **not** delete a row branch, and do **not** run
+`POST /league/{id}/player/sync` against the real draft leagues. Merging a
+completed row to `main` locally is fine. Git protects code, not Mongo —
+see `CLAUDE.md`.
+
+### Branching and row status
+
+One branch per row, cut from `main` before the work starts and merged back
+when the row is done — see the Branching section in `CLAUDE.md` for naming
+and for why the Ringer harness needs the branch cut up front. H2 landed on
+`main` before this rule was restored; that history stays as-is.
+
+**Before starting any row, run `git branch --list`.** An unmerged row
+branch means that row is already in flight and a previous session stalled;
+resume the branch rather than re-cutting it. Branch existence — not this
+document — is the reliable signal, because a session that crashes never
+reaches its closeout to update a status stamp here.
+
+**Row status vocabulary.** `Open` = not started. `In progress (branch
+<name>, YYYY-MM-DD)` = a session started it; expect an unmerged branch.
+`Done (YYYY-MM-DD)` = merged to `main`. Stamp a row `In progress` with its
+branch name when you start it, so the plan and the branch list agree — but
+treat a mismatch as "the branch is right, this doc is stale."
+
+### Session closeout — all five steps, every session
+
+1. **Update this plan.** Set the row to `Done (YYYY-MM-DD)` with a
+   one-paragraph note in the style of the Phase A–H rows: what shipped,
+   the key decision and its rationale, file paths, test count, and any
+   spec deviation and why. If you learned something that changes a LATER
+   row, edit that row too — a stale row misroutes the next session.
+   Distinguish "unblocked" from "next". Update `Last updated:` at the top,
+   and the test count in `CLAUDE.md` if it moved.
+2. **Save context to Open Brain.** One thought: what shipped, the decision
+   and WHY (the rationale is what does not survive in code), measured
+   before/after numbers, anything that turned out false or different from
+   what the plan assumed, and what the next session needs that it cannot
+   get from the repo. Do not re-capture what the code or this doc already
+   records. If this session invalidated an earlier note, say so
+   explicitly — there are correction notes for the ffanalytics thought and
+   for H2; follow that pattern.
+3. **Commit on the row branch.** Run the full suite first
+   (`cd backend && venv312/Scripts/python.exe -m pytest -q`) and state the
+   pass count in the commit body.
+4. **Merge** the row branch to `main` locally and report the merge commit.
+   Do not delete the branch and do not push unless asked.
+5. **Hand off** — print the next session's kickoff prompt, per the
+   contract below. This is a deliverable, not a courtesy; a session that
+   ends without it has not finished.
+
+**If you cannot finish:** say so plainly, leave the branch in place with
+your work committed to it, and state which branch holds the partial work
+and what remains. Do not merge a half-done row and do not delete its
+branch — its existence is how the next session knows to resume.
+
+### The handoff-prompt contract
+
+Step 5's prompt must stand alone for a session starting **cold**, with no
+memory of yours. Required sections — omitting any of them is an incomplete
+handoff:
+
+1. **The row**, and the one-line reason it is next (per the selection
+   rule above). If the next row is `[human]`, say that instead and stop.
+2. **The Claude model** to select in the picker, and **the branch**, each
+   called out in one line *before* the code block as well as inside it.
+3. **The three-way branch block**, verbatim in shape — clean-tree check →
+   `git branch --list <row-branch>` → cut if absent, RESUME if present.
+   Never a bare `git checkout -b`.
+4. **Measured facts not to re-derive**, with numbers. This is what stops
+   the next session re-auditing settled work.
+5. **What is decided vs. still open**, so it knows which calls are its own.
+6. **Ringer harness details** — harness path and arg order, the hard 60s
+   `CHECK_TIMEOUT_S` (never bare `pytest` in a check), engine and its
+   scoreboard record, and the reference manifest/check paths.
+7. **Scope limits** — which rows not to start, and the data-safety line
+   about not re-syncing real leagues.
+8. **This same five-step closeout**, by reference to this section rather
+   than by re-pasting it: *"Follow the Session Protocol → Session closeout
+   in docs/EXECUTION_PLAN_FEATURES.md, all five steps."* Pointing here is
+   what stops the protocol decaying one copy at a time.
+
+---
+
 ## Phase A — Draft-Time Additions (now → Aug 15)
 
 Extends the existing draft simulator. No new external data required.
@@ -356,24 +487,12 @@ turns "build an R integration subsystem" into "generalize one push source
 and write an R script" — no R runtime inside the backend, no new fetch
 surface, no new scheduler failure mode.
 
-### Branching and row status
+### Branching, row status, closeout and handoff
 
-One branch per row, cut from `main` before the work starts and merged back
-when the row is done — see the Branching section in `CLAUDE.md` for naming
-and for why the Ringer harness needs the branch cut up front. H2 landed on
-`main` before this rule was restored; that history stays as-is.
-
-**Before starting any row, run `git branch --list`.** An unmerged row
-branch means that row is already in flight and a previous session stalled;
-resume the branch rather than re-cutting it. Branch existence — not this
-document — is the reliable signal, because a session that crashes never
-reaches its closeout to update a status stamp here.
-
-**Row status vocabulary.** `Open` = not started. `In progress (branch
-<name>, YYYY-MM-DD)` = a session started it; expect an unmerged branch.
-`Done (YYYY-MM-DD)` = merged to `main`. Stamp a row `In progress` with its
-branch name when you start it, so the plan and the branch list agree — but
-treat a mismatch as "the branch is right, this doc is stale."
+All four now live in one cross-cutting place: **[Session
+Protocol](#session-protocol)** near the top of this file. Read it before
+starting any H row. H2 landed on `main` before the branch-per-row rule was
+restored; that history stays as-is.
 
 ### Ringer routing
 
@@ -395,10 +514,10 @@ verification go to workers.
 | --- | --- | --- | --- | --- | --- |
 | H1 | **Generalize the push path.** `PUSH_SOURCES` is hardcoded `["udk"]` and the ingest endpoint is UDK-specific. Make push sources registrable so `ffanalytics` (and future drops) ride the same ingest/resolve/blend path. Purely enabling. | [Sonnet] | **Done (2026-07-31).** `PUSH_SOURCES` (a plain list) became `PUSH_SOURCE_PARSERS` (`backend/data_sources/service.py`), a `name -> parser` registry seeded with `udk`'s existing `parse_udk_rows` via a new `register_push_source(name, parser)`; `ALL_SOURCES` became `all_sources()` (a function, not a module-level constant) so a source registered after import — the whole point, since a check or a future adapter module registers at call time, not at `service.py`'s load time — is picked up by blend rebuilds and `/rankings/status` without a restart. Endpoint side: `app.py` gained `POST /rankings/push/{source}`, generic over any registered parser (404 on an unregistered name); `POST /rankings/udk` is now a two-line alias calling the same shared `_ingest_push_source` helper, kept for the existing test suite and any external caller rather than as a compatibility shim with a deprecation path — there's no reason to ever remove it. **Implemented directly rather than via Ringer/GLM** — the interface was small enough (one dict-to-registry conversion, one new thin endpoint) that delegating cost more than it saved; no worker swarm was spun up. **The check, not a grep:** `tests/test_phase2_flow.py::test_generic_push_route_carries_a_registered_source_into_the_blend` registers a synthetic third projection source at runtime, uploads a fixture CSV through the generic route, and asserts `blended_projection` for Christian McCaffrey actually moves — baseline (espn 320 + sleeper 330)/2 = 325 vs. post-upload (320+330+310)/3 = 320.0 — not just that `"synthetic"` shows up in `sources_used` vocabulary. A second test (`test_generic_push_route_rejects_unregistered_source`) covers the 404 path. **690 tests passing** (688 + 2 new). No blend methodology touched — this row is purely the registration/ingest plumbing H2 already established the contract for. | 0.5d | — |
 | H2 | **Fix `blended_projection`.** | [Opus 5] → [GLM 5.2] | **Done (2026-07-31).** Commits `a18d957` (contract) and `4cc6c00` (implementation, Ringer/GLM 5.2, first-try pass). **688 tests passing** (682 + 6). The contract lives in `backend/data_sources/blend.py`'s docstring; implementation touches `blend.py`, `models/sources.py`, `app.py` (sync now counts and logs the drop) and `tests/test_blend.py`. **The row as written was wrong about where the value was.** "Weighted mean honoring `RANKING_BLEND_WEIGHTS`" is a *no-op*: the setting ships as `{}` and an equal-weighted mean IS an unweighted mean — measured, 0 of the top 200 move. Shipping only that would have been a third inert change in the G3/G5 family. The real defects were two the row never named. (1) **Scale:** sources disagree on what a point is — espn/sleeper per-position ratios k 1.41, rb 1.14, dst 1.04, te 1.03, wr 1.02, qb 0.98; on the same 31 kickers espn projects 41% more points. Fixed by rescaling each source onto an anchor's (espn's) per-position scale before averaging, factor = **median** of per-player ratios (mean ratio is wrecked by near-zero denominators: wr 1.38 by mean vs 1.02 by median), floored at `RESCALE_MIN_PROJECTION` 10.0 with `RESCALE_MIN_OVERLAP` 10. (2) **Sentinels:** espn writes `0.0` for "no projection" (45 records) — James Conner read sleeper 59.80 / espn 0.00 and materialized at **29.90**; non-positive values are now dropped. **Outlier handling: deliberately none.** With two projection sources every robust estimator degenerates (median of two = mean, trimmed mean of two = mean, MAD has no majority), so rejection reduces to "always believe source X" — and per-source accuracy is unbacktestable here because the historical store keeps ESPN's projected/actual pairs only. Disagreement is preserved in the mean and surfaced as a new `projection_spread` field (478 records carry one). **The 97 stay dropped, not reconstructed:** their `blended_value` is a degenerate tie at −0.417 derived from an espn adp of 584.49 — itself an "undrafted" sentinel — so inverting it would fabricate the engine's primary input from "ESPN declined to rank him". Measured effect, all top-200 (200/200) move, mean \|Δ\| 6.44: Bijan Robinson 338.68→361.37, Jahmyr Gibbs 336.50→358.00, Josh Allen 365.38→**360.99 (down)**, Brandon Aubrey 143.78→167.65, James Conner 29.90→68.15. `position_max_points` k +23.87, rb +22.69, wr +3.66, te +3.12, dst +2.33, qb −4.39. **Not adopted yet — no re-sync was run; see H5.** | 1d | — |
-| H3 | **R toolchain spike, timeboxed.** Install R + ffanalytics, run one seasonal `scrape_data()`, confirm usable output. **Kill-switch: >1 day → stop, go to H6.** | [human] | **❌ No** — interactive Windows installers and environment mutation on the host. Not a worker task. If it proceeds, install R **into WSL** so H4's check can execute `Rscript` the way the harness executes `venv312`. | 0.5–1d | — |
-| H4 | **ffanalytics producer script.** `backend/scripts/ffanalytics_export.R` → CSV in H1's schema. Scored to *your* league settings, not generic PPR — the one thing no current source does. | [Sonnet] | **✅ Conditional on H3.** Check must actually run `Rscript` and validate the CSV against H1's schema; if R is unreachable from the check, this is unverifiable and must not run under Ringer. | 1d | H1, H3 |
+| H3 | **R toolchain spike, timeboxed.** Install R + ffanalytics, run one seasonal `scrape_data()`, confirm usable output. **Kill-switch: >1 day → stop, go to H6.** | [human] | **❌ No** — interactive Windows installers and environment mutation on the host. Not a worker task. If it proceeds, install R **into WSL** so H4's check can execute `Rscript` the way the harness executes `venv312`. **⚠️ THIS IS THE CURRENT NEXT ROW AND IT BLOCKS THE QUEUE (as of 2026-07-31, H1 and H2 done).** It is `[human]` — the repo owner runs it, not a Claude session. Its outcome is the gate that decides the whole rest of the phase: **pass → H4, H5** (the ffanalytics arm); **fail or kill-switch → H6** (native adapters). Both arms are ineligible until it resolves, so **do not route around it** to find a Claude-actionable row — that pre-empts a decision nobody has made. If the owner declines to run it or it blows the ~Aug 10 kill-switch, record that here as a failure and H6 opens. | 0.5–1d | — |
+| H4 | **ffanalytics producer script.** `backend/scripts/ffanalytics_export.R` → CSV in H1's schema. Scored to *your* league settings, not generic PPR — the one thing no current source does. | [Sonnet] | **✅ Conditional on H3.** Check must actually run `Rscript` and validate the CSV against H1's schema; if R is unreachable from the check, this is unverifiable and must not run under Ringer. **Gated the same way H6 is, in the opposite direction:** eligible only once H3 has run **and passed**. An unrun H3 is an unresolved gate, not a green light. | 1d | **H1 + H3-passed** |
 | H5 | **Measure before adopting.** Rebuild the blend with and without the change; diff `projected_points`, tier assignments, `position_max_points`, and `value_over_wait` verdicts on the live Mahomes board. Gate adoption on the result. | [Opus 5] | **✅ Yes** — `research-with-proof` pattern; the behavior script *is* the measurement. Worker produces the numbers, **orchestrator reads them and decides.** Never let the worker that builds the integration also rule on whether it helped. **⚠️ SCOPE GREW ON 2026-07-31 — but this row does NOT move up the queue.** Its dependency on H4 is gone; its *position* is unchanged. Run it after H1/H3/H4 as planned, so it measures the ffanalytics arm and H2 in ONE pass instead of twice. What changed is that it now has a second thing to gate: **H2 already changed every projection in the pool and has NOT been adopted.** The code is committed but no `POST /league/{id}/player/sync` was run, so the live leagues still hold the old `projected_points`. Re-syncing is the adoption step and it is this row's job to gate. Two things make it non-trivial rather than a formality: (a) **tiers genuinely move** — rescaling an *input* before averaging is not a monotone transform of the output (with `old=(e+s)/2`, `new=(e+f·s)/2`, the shift `(f−1)·s/2` grows with s), measured 76/94 rb and 20/31 k keeping their within-position slot, and `position_tier` is assigned by within-position rank; (b) `position_max_points` shifts hard for k (+23.87) and rb (+22.69) while qb *falls* (−4.39), which re-scales the `randomized_points()` ceiling asymmetrically across positions. Also note 22 more records lose their projection (96 dropped → 118) — all backup QBs and non-entities whose only "projection" was an espn sentinel zero. **The failure mode to avoid is this row becoming unreachable.** If H3 misses its ~Aug 10 kill-switch and the ffanalytics arm defers to in-season, H5 must STILL run pre-draft for H2 alone — otherwise H2's fix sits committed-but-unadopted straight through the draft, which is the worst of both worlds: the defect is "fixed" in code while the live leagues keep drafting on the old numbers. So: normally S5, after H4; but if the ffanalytics arm defers, promote it rather than deferring it with them. Still must be sequenced against G7, not run in parallel. | 1d | ~~H2, H4~~ **H2 (done) — H4 optional** |
-| H6 | **Fallback: native Python projection adapters.** If H3 fails, skip R entirely — write `BaseSourceAdapter` subclasses for NumberFire / CBS / FFToday. Less coverage than ffanalytics, zero new runtime, perfect fit for the existing framework. | [Sonnet] | **✅ Best fan-out in the phase** — three independent adapters over disjoint files: textbook `fix-swarm` / parallel lanes, one worker each. Good candidate for an exploration lane on one of the three. **Worth more after H2 than the row implies:** a THIRD projection source is what makes real outlier handling possible for the first time. H2's contract deliberately ships no outlier rule because at n=2 every robust estimator degenerates to the mean; at n≥3 median / trimmed mean / MAD rejection all become computable, and the contract says to revisit then. Each new adapter also just works with the rescale — it is anchored per (source, position) against espn, so a new source needs no calibration beyond clearing `RESCALE_MIN_OVERLAP` (10) overlapping players per position. Any adapter that emits a sentinel for "no projection" must emit `None`, not `0.0`. | 1.5d | H1 |
+| H6 | **Fallback: native Python projection adapters.** If H3 fails, skip R entirely — write `BaseSourceAdapter` subclasses for NumberFire / CBS / FFToday. Less coverage than ffanalytics, zero new runtime, perfect fit for the existing framework. | [Sonnet] | **✅ Best fan-out in the phase** — three independent adapters over disjoint files: textbook `fix-swarm` / parallel lanes, one worker each. Good candidate for an exploration lane on one of the three. **Worth more after H2 than the row implies:** a THIRD projection source is what makes real outlier handling possible for the first time. H2's contract deliberately ships no outlier rule because at n=2 every robust estimator degenerates to the mean; at n≥3 median / trimmed mean / MAD rejection all become computable, and the contract says to revisit then. Each new adapter also just works with the rescale — it is anchored per (source, position) against espn, so a new source needs no calibration beyond clearing `RESCALE_MIN_OVERLAP` (10) overlapping players per position. Any adapter that emits a sentinel for "no projection" must emit `None`, not `0.0`. **⚠️ GATED — H1 alone does NOT make this eligible.** H6 is the *fallback arm*, mutually exclusive with H4/H5: it is only correct once H3 has actually run **and failed** (or blown its ~Aug 10 kill-switch). An unrun H3 is an unresolved gate. If the R spike lands, most of this row's 1.5d is wasted — ffanalytics covers ~10 projection sources against these three. A session skipped the unrun `[human]` H3 and routed here on 2026-07-31; see the selection rule in [Session Protocol](#session-protocol). | 1.5d | **H1 + H3-failed** |
 | H7 | **FantasyPros expert-disagreement signal.** *Optional.* Extend the existing adapter to capture std-dev across experts → an uncertainty field feeding tier confidence and the near-tie margin. Genuinely new signal. | [Opus 5] | **✅ Yes** — single-adapter extension, `task_type: code-feature`. **Build on `projection_spread`, do not add a parallel field.** H2 shipped the first uncertainty field on `BlendedRankingRecord` (max minus min of the rescaled per-source projections, `None` below two sources; 478 of 769 records carry one, top-200 mean 12.84 / median 9.06 / max 56.48). Nothing consumes it yet — H7 is the row that gives it a consumer. FantasyPros expert std-dev is a *second, better* uncertainty channel (130+ raters vs 2 sources); the design question this row must settle is whether the two combine into one confidence number or stay separate, not whether to invent another field. | 1d | — |
 | H8 | **Preseason SOS.** *Optional, defer.* The only gap C2/C5 don't cover. Must land in Mongo via ingestion — see the structural cached-only blocker above. | [Sonnet] | **✅ Yes** — the existing import-graph test is already the guard rail; the behavior script asserts it still holds. | 1d | — |
 | ~~H9~~ | ~~Fantasy Nerds integration~~ | — | **Dropped** — redundant and paid. See above. | — | — |

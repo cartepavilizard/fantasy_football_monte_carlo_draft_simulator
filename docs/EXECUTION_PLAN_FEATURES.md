@@ -356,12 +356,24 @@ turns "build an R integration subsystem" into "generalize one push source
 and write an R script" — no R runtime inside the backend, no new fetch
 surface, no new scheduler failure mode.
 
-### Branching
+### Branching and row status
 
 One branch per row, cut from `main` before the work starts and merged back
 when the row is done — see the Branching section in `CLAUDE.md` for naming
 and for why the Ringer harness needs the branch cut up front. H2 landed on
 `main` before this rule was restored; that history stays as-is.
+
+**Before starting any row, run `git branch --list`.** An unmerged row
+branch means that row is already in flight and a previous session stalled;
+resume the branch rather than re-cutting it. Branch existence — not this
+document — is the reliable signal, because a session that crashes never
+reaches its closeout to update a status stamp here.
+
+**Row status vocabulary.** `Open` = not started. `In progress (branch
+<name>, YYYY-MM-DD)` = a session started it; expect an unmerged branch.
+`Done (YYYY-MM-DD)` = merged to `main`. Stamp a row `In progress` with its
+branch name when you start it, so the plan and the branch list agree — but
+treat a mismatch as "the branch is right, this doc is stale."
 
 ### Ringer routing
 

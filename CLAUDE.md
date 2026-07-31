@@ -23,16 +23,34 @@
 
 ## Branching — one branch per plan row
 
-**Never work a plan row directly on `main`.** Cut a branch named after the
-row before you touch anything:
-
-```
-git checkout main && git pull && git checkout -b h1-push-sources
-```
-
-Naming: `<row-id-lowercase>-<short-slug>` (`h1-push-sources`,
+**Never work a plan row directly on `main`.** Naming:
+`<row-id-lowercase>-<short-slug>` (`h1-push-sources`,
 `h5-adoption-measurement`). Merge to `main` when the row is done and you
 are satisfied; delete the branch after.
+
+**Start every row session by checking whether the row is already in
+flight.** An unmerged row branch means a previous session stalled partway
+— it is NOT a clean start, and re-cutting would either fail or orphan
+that work.
+
+```
+git status --porcelain                    # must be empty; commit or stash first
+git branch --list h1-push-sources         # does this row already have a branch?
+```
+
+- **No branch → new row.** Cut it:
+  `git checkout main && git pull && git checkout -b h1-push-sources`
+- **Branch exists → a prior session stalled. RESUME, do not re-cut.**
+  `git checkout h1-push-sources && git log --oneline main..h1-push-sources`
+  Read those commits before doing anything: they tell you how far the row
+  actually got, which is the one thing the stalled session never got to
+  write down.
+
+**Branch existence is the source of truth for "is a row in flight,"** and
+that is deliberate — it needs no discipline from the session that dies.
+A row's plan-doc status can go stale (a session that crashes never
+reaches its closeout), but the branch is created the moment work starts.
+`git branch --list` with no argument shows every row currently in flight.
 
 - **The Ringer harness follows you.** `check_task_generic.sh` runs
   `cd "$REPO"; git commit` on whatever branch is checked out — it does not

@@ -179,6 +179,92 @@ def test_status_before_any_activity(client):
     assert all(s["last_attempt"] is None for s in status["sources"].values())
 
 
+def _parse_synthetic_rows(rows):
+    """A second push-source parser, unrelated to udk.py, for H1's registry test"""
+    records = []
+    problems = []
+    for row in rows:
+        name = row.get("Name")
+        position = row.get("Pos")
+        if not name or not position:
+            continue
+        proj = row.get("Proj")
+        records.append(
+            rec(
+                name,
+                position,
+                nfl_team=row.get("Team") or None,
+                projection=float(proj) if proj not in (None, "") else None,
+            )
+        )
+    if not records:
+        problems.append("no usable rows")
+    return records, problems
+
+
+SYNTHETIC_CSV = (
+    "Name,Pos,Team,Proj\n"
+    "Christian McCaffrey,RB,SF,310\n"
+    "Josh Allen,QB,BUF,380\n"
+).encode()
+
+
+def test_generic_push_route_carries_a_registered_source_into_the_blend(
+    client, five_pull_sources, monkeypatch
+):
+    """
+    H1: PUSH_SOURCE_PARSERS is a registry, not a udk-only hardcode. A
+    freshly registered source must ingest through the generic
+    /rankings/push/{source} route and its values must actually reach the
+    blend -- not just appear in vocabulary.
+    """
+    from data_sources import service
+
+    client.post("/rankings/refresh")
+    baseline_blend = client.get("/rankings/blended").json()
+    baseline_cmc = next(
+        r
+        for r in baseline_blend["records"]
+        if r["canonical_name"] == "Christian McCaffrey"
+    )
+    assert "synthetic" not in baseline_cmc["source_values"]
+
+    monkeypatch.setitem(
+        service.PUSH_SOURCE_PARSERS, "synthetic", _parse_synthetic_rows
+    )
+    upload = client.post(
+        "/rankings/push/synthetic",
+        files={"file": ("synthetic.csv", SYNTHETIC_CSV, "text/csv")},
+    )
+    assert upload.status_code == 200, upload.text
+    summary = upload.json()
+    assert summary["source"] == "synthetic"
+    assert "synthetic" in summary["blend"]["sources_used"]
+
+    blend = client.get("/rankings/blended").json()
+    cmc = next(
+        r for r in blend["records"] if r["canonical_name"] == "Christian McCaffrey"
+    )
+    # Not just vocabulary: the third source's projection actually moves
+    # the blended number, since espn (320) + sleeper (330) alone average
+    # to 325 and adding synthetic's 310 pulls that down.
+    assert "synthetic" in cmc["source_values"]
+    assert cmc["blended_projection"] != baseline_cmc["blended_projection"]
+    assert cmc["blended_projection"] == round((320.0 + 330.0 + 310.0) / 3, 2)
+
+    status = client.get("/rankings/status").json()
+    assert status["sources"]["synthetic"]["kind"] == "push"
+
+
+def test_generic_push_route_rejects_unregistered_source(client):
+    response = client.post(
+        "/rankings/push/not-a-real-source",
+        files={"file": ("x.csv", b"Name,Pos\n", "text/csv")},
+    )
+    assert response.status_code == 404
+    assert "not-a-real-source" in response.json()["detail"]
+
+
 def test_sync_carries_udk_tiers_into_league_players(
     client, five_pull_sources, league_id
 ):

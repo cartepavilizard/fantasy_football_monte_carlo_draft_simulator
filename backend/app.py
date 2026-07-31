@@ -1259,30 +1259,35 @@ async def get_blended_rankings(
     return await get_latest_blend(season, scoring_format)
 
 
-@app.post("/rankings/udk", tags=["rankings"])
-async def upload_udk_rankings(
-    file: UploadFile = File(...),
-    season: int = DRAFT_YEAR,
-    scoring_format: str = SCORING_FORMAT,
-):
+async def _ingest_push_source(
+    source: str, file: UploadFile, season: int, scoring_format: str
+) -> dict:
     """
-    Ingest a Fantasy Footballers Ultimate Draft Kit CSV export — the
-    deliberate file-drop source (login-walled paid content is not
-    scraped). Player names resolve against the stored anchor namespace,
-    so run POST /rankings/refresh at least once before uploading; the
-    blend is regenerated immediately to include the upload.
+    Shared body for every file-drop upload endpoint: parse with the
+    source's registered parser, store the batch, and regenerate the
+    blend. Player names resolve against the stored anchor namespace, so
+    POST /rankings/refresh must have run at least once first.
     """
-    from data_sources.udk import parse_udk_rows
     from models.sources import SourceRankingBatch
 
+    parser = ranking_service.PUSH_SOURCE_PARSERS.get(source)
+    if parser is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Unknown push source '{source}'; registered: "
+                f"{sorted(ranking_service.PUSH_SOURCE_PARSERS)}"
+            ),
+        )
+
     rows = read_csv_upload(await file.read(), set())
-    records, problems = parse_udk_rows(rows)
+    records, problems = parser(rows)
     if problems:
         raise HTTPException(
-            status_code=422, detail=f"UDK export not usable: {problems}"
+            status_code=422, detail=f"{source} export not usable: {problems}"
         )
     batch = SourceRankingBatch(
-        source="udk",
+        source=source,
         season=season,
         scoring_format=scoring_format,
         fetched_at=datetime.now(),
@@ -1307,6 +1312,38 @@ async def upload_udk_rankings(
             "POST /rankings/refresh, then re-upload this file"
         )
     return summary
+
+
+@app.post("/rankings/push/{source}", tags=["rankings"])
+async def upload_push_rankings(
+    source: str,
+    file: UploadFile = File(...),
+    season: int = DRAFT_YEAR,
+    scoring_format: str = SCORING_FORMAT,
+):
+    """
+    Ingest a CSV export from any registered file-drop source (see
+    data_sources.service.register_push_source) — the deliberate manual
+    step for sources that can't or shouldn't be scraped/polled. Player
+    names resolve against the stored anchor namespace, so run
+    POST /rankings/refresh at least once before uploading; the blend is
+    regenerated immediately to include the upload.
+    """
+    return await _ingest_push_source(source, file, season, scoring_format)
+
+
+@app.post("/rankings/udk", tags=["rankings"])
+async def upload_udk_rankings(
+    file: UploadFile = File(...),
+    season: int = DRAFT_YEAR,
+    scoring_format: str = SCORING_FORMAT,
+):
+    """
+    Ingest a Fantasy Footballers Ultimate Draft Kit CSV export — the
+    deliberate file-drop source (login-walled paid content is not
+    scraped). Kept as a stable alias for POST /rankings/push/udk.
+    """
+    return await _ingest_push_source("udk", file, season, scoring_format)
 
 
 @app.get("/rankings/status", tags=["rankings"])

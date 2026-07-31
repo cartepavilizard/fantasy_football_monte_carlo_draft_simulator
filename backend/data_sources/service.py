@@ -20,7 +20,7 @@ Sleeper then FFC as fallbacks.
 """
 import asyncio
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 from odmantic import query
 
@@ -35,7 +35,7 @@ from models.config import (
 )
 from models.sources import BlendedRanking, SourceRankingBatch, SourceRankingRecord
 
-from .base import BaseSourceAdapter
+from .base import BaseSourceAdapter, SourceRecord
 from .blend import blend_batches
 from .cache import RawResponseCache
 from .espn_rankings import EspnRankingsAdapter
@@ -43,6 +43,7 @@ from .fantasypros import FantasyProsAdapter
 from .ffc import FantasyFootballCalculatorAdapter
 from .resolver import PlayerResolver, load_alias_overrides
 from .sleeper import SleeperAdapter
+from .udk import parse_udk_rows
 from .yahoo import YahooAdapter
 
 ADAPTER_CLASSES = {
@@ -53,13 +54,31 @@ ADAPTER_CLASSES = {
     "yahoo": YahooAdapter,
 }
 
-# Sources that are uploaded (file drop), never fetched
-PUSH_SOURCES = ["udk"]
+# A push-source parser takes the CSV's parsed rows and returns
+# (records, problems) -- the same contract as parse_udk_rows.
+PushParser = Callable[[list], Tuple[List[SourceRecord], list]]
 
-ALL_SOURCES = list(ADAPTER_CLASSES) + PUSH_SOURCES
+# File-drop sources (uploaded, never fetched), keyed by the name used in
+# POST /rankings/push/{source}. Registered here rather than hardcoded so
+# a new file-drop producer (ffanalytics, a future export) rides the same
+# ingest/resolve/blend path as udk without touching the endpoint.
+PUSH_SOURCE_PARSERS: Dict[str, PushParser] = {}
+
+
+def register_push_source(name: str, parser: PushParser) -> None:
+    """Make a file-drop source ingestible via POST /rankings/push/{source}"""
+    PUSH_SOURCE_PARSERS[name] = parser
+
+
+register_push_source("udk", parse_udk_rows)
 
 # Whose spellings become canonical, in order of preference
 ANCHOR_PRIORITY = ["espn", "sleeper", "ffc"]
+
+
+def all_sources() -> List[str]:
+    """Every pull + push source currently registered"""
+    return list(ADAPTER_CLASSES) + list(PUSH_SOURCE_PARSERS)
 
 
 def _yahoo_configured() -> bool:
@@ -85,7 +104,7 @@ def build_adapters(
         raise ValueError(
             f"Unknown ranking sources {unknown}; "
             f"available: {sorted(ADAPTER_CLASSES)} "
-            f"(plus push-only: {PUSH_SOURCES})"
+            f"(plus push-only: {sorted(PUSH_SOURCE_PARSERS)})"
         )
     cache = RawResponseCache(DATA_SOURCE_CACHE_DIR, DATA_SOURCE_CACHE_TTL_SECONDS)
     return {name: ADAPTER_CLASSES[name](cache=cache) for name in names}
@@ -192,7 +211,7 @@ async def rebuild_blend(
     push) and persist the result
     """
     batches = []
-    for source in ALL_SOURCES:
+    for source in all_sources():
         batch = await latest_batch(engine, source, season, scoring_format)
         if batch:
             batches.append(batch)
@@ -291,7 +310,7 @@ async def source_status(engine, season: int, scoring_format: str) -> dict:
     """
     now = datetime.now()
     sources = {}
-    for source in ALL_SOURCES:
+    for source in all_sources():
         last_attempt = await latest_batch(
             engine, source, season, scoring_format, successful_only=False
         )
@@ -301,7 +320,7 @@ async def source_status(engine, season: int, scoring_format: str) -> dict:
             else await latest_batch(engine, source, season, scoring_format)
         )
         entry = {
-            "kind": "push" if source in PUSH_SOURCES else "pull",
+            "kind": "push" if source in PUSH_SOURCE_PARSERS else "pull",
             "configured": True,
             "last_attempt": _batch_stats(last_attempt) if last_attempt else None,
             "last_success": _batch_stats(last_success) if last_success else None,

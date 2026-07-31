@@ -52,6 +52,10 @@ class BlendedRankingRecord(EmbeddedModel):
     nfl_team: Optional[str] = None
     blended_value: float  # positional z-score blend; the sort key
     blended_projection: Optional[float] = None
+    # max - min of the rescaled per-source projections, None below two
+    # sources; surfaces genuine cross-source disagreement (uncertainty to
+    # be consumed by tier-confidence/near-tie work, not error suppressed).
+    projection_spread: Optional[float] = None
     consensus_rank: Optional[float] = None
     adp: Optional[float] = None
     tier: Optional[int] = None

@@ -1690,12 +1690,18 @@ async def sync_players_from_blended_rankings(
 
     players = []
     seen = set()
+    skipped_no_projection = 0
     for record in blend.records:  # already sorted best-first
         if record.position not in ["qb", "rb", "wr", "te", "dst", "k"]:
             continue
         # The simulator runs on projected points, so a record no source
-        # projected (e.g. ADP-only deep sleepers) cannot be materialized
+        # projected (e.g. ADP-only deep sleepers) cannot be materialized.
+        # They are NOT reconstructed from blended_value: the contract
+        # explains their blended_value comes from an espn adp sentinel of
+        # 584.49 and inverting it would fabricate the engine's primary
+        # input. They stay dropped, but counted and logged, not silent.
         if record.blended_projection is None:
+            skipped_no_projection += 1
             continue
         if record.canonical_name in seen:
             continue
@@ -1717,6 +1723,11 @@ async def sync_players_from_blended_rankings(
                 source_values=record.source_values,
             )
         )
+    print(
+        f"player/sync for league '{league.name}': materialized {len(players)} "
+        f"players, skipped {skipped_no_projection} blend records with no "
+        f"blended_projection"
+    )
     if not players:
         raise HTTPException(
             status_code=400,

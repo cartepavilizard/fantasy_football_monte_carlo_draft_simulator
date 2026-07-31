@@ -145,7 +145,7 @@ OUT OF SCOPE, deliberately: consensus_rank and adp remain plain
 fmean(). Picks and ordinals are already a common unit across sources,
 so raw averaging is defensible there in a way it never was for points.
 """
-from statistics import fmean, pstdev
+from statistics import fmean, median, pstdev
 from typing import Dict, List, Optional
 
 from models.sources import BlendedRanking, BlendedRankingRecord, SourceRankingBatch
@@ -153,6 +153,18 @@ from models.sources import BlendedRanking, BlendedRankingRecord, SourceRankingBa
 from .resolver import normalize_position
 
 BLENDABLE_POSITIONS = {"qb", "rb", "wr", "te", "dst", "k"}
+
+# Rescale floors for the projection cross-source fit (see module docstring,
+# section 2 SCALE). Below RESCALE_MIN_PROJECTION pts the per-player anchor/
+# source ratio is noise over noise; below RESCALE_MIN_OVERLAP usable pairs
+# the median is a guess, so no rescale is applied (factor 1.0).
+RESCALE_MIN_PROJECTION = 10.0
+RESCALE_MIN_OVERLAP = 10
+
+# Whose scale the rescaled projections land on. Mirrors
+# data_sources.service.ANCHOR_PRIORITY; kept LOCAL because service.py imports
+# blend.py (importing it from there would be circular).
+PROJECTION_ANCHOR_PRIORITY = ("espn", "sleeper", "ffc")
 
 # Per (source, position) group, the first metric at least half the group's
 # records carry becomes that group's value language
@@ -188,7 +200,12 @@ class _PlayerAccumulator:
         self.position = position
         self.nfl_team: Optional[str] = None
         self.zscores: Dict[str, float] = {}  # source -> z
-        self.projections: List[float] = []
+        # source -> that source's strictly-positive point projection for this
+        # player (first value per source wins, consistent with the dedupe).
+        # Non-positive projections are dropped on insert — a season point
+        # projection <= 0 is not data (espn's 0.0 "no projection" sentinels
+        # and sleeper's negative season totals alike).
+        self.projections: Dict[str, float] = {}
         self.adps: List[float] = []
         self.ranks: List[float] = []
         self.tiers: List[int] = []
@@ -237,8 +254,13 @@ def blend_batches(
                         record.canonical_name
                     ]
                 accumulator.nfl_team = accumulator.nfl_team or record.nfl_team
-                if record.projection is not None:
-                    accumulator.projections.append(record.projection)
+                if record.projection is not None and record.projection > 0:
+                    # First projection per source wins (consistent with the
+                    # per-source dedupe). Strictly > 0 drops espn's 0.0 "no
+                    # projection" sentinels and sleeper's negative totals.
+                    accumulator.projections.setdefault(
+                        batch.source, record.projection
+                    )
                 if record.adp is not None:
                     accumulator.adps.append(record.adp)
                 if record.rank is not None:
@@ -247,6 +269,69 @@ def blend_batches(
                     accumulator.tiers.append(record.tier)
         if contributed:
             sources_used.append(batch.source)
+
+    # Phase two: compute the per (source, position) rescale factors that map
+    # every non-anchor projection source onto the anchor's point scale (see
+    # module docstring, section 2 SCALE). Done once here, after every
+    # accumulator's position and per-source projections are settled.
+    projection_sources = [
+        source
+        for source in sources_used
+        if any(
+            source in accumulator.projections
+            for accumulator in players.values()
+        )
+    ]
+    if projection_sources:
+        anchor = next(
+            (s for s in PROJECTION_ANCHOR_PRIORITY if s in projection_sources),
+            None,
+        )
+        if anchor is None:
+            # No anchor-priority source is present: fall back to the
+            # projection-bearing source with the most projections, ties
+            # broken by source name (ascending) so the choice is always
+            # deterministic.
+            anchor = min(
+                projection_sources,
+                key=lambda s: (
+                    -sum(
+                        1
+                        for accumulator in players.values()
+                        if s in accumulator.projections
+                    ),
+                    s,
+                ),
+            )
+        # Gather the per-player overlap ratios anchor/source, keyed by
+        # (source, position). The MEDIAN (not the mean and not the ratio of
+        # means) is the factor: the mean ratio is wrecked by near-zero
+        # denominators deep in the pool.
+        factors: Dict[tuple, float] = {anchor: 1.0}
+        for source in projection_sources:
+            if source == anchor:
+                continue
+            by_position: Dict[str, list] = {}
+            for accumulator in players.values():
+                if (
+                    anchor in accumulator.projections
+                    and source in accumulator.projections
+                ):
+                    anchor_val = accumulator.projections[anchor]
+                    source_val = accumulator.projections[source]
+                    if (
+                        anchor_val >= RESCALE_MIN_PROJECTION
+                        and source_val >= RESCALE_MIN_PROJECTION
+                    ):
+                        by_position.setdefault(
+                            accumulator.position, []
+                        ).append(anchor_val / source_val)
+            for position, ratios in by_position.items():
+                factors[(source, position)] = (
+                    median(ratios)
+                    if len(ratios) >= RESCALE_MIN_OVERLAP
+                    else 1.0
+                )
 
     records = []
     for canonical_name, accumulator in players.items():
@@ -264,17 +349,49 @@ def blend_batches(
             )
             / total_weight
         )
+
+        # blended_projection: the WEIGHTED mean of each source's rescaled
+        # contribution, using the same weights map and default as
+        # blended_value. Non-positive projections were dropped on insert;
+        # a player left with no surviving contributions (or total weight
+        # <= 0) gets None, exactly as if nobody projected them.
+        blended_projection = None
+        projection_spread = None
+        if projection_sources:
+            # Rescale each surviving source's raw projection onto the
+            # anchor's scale (anchor factor is always 1.0). The same list
+            # feeds the weighted mean and the max-minus-min spread.
+            rescaled: List[tuple] = []
+            proj_total_weight = 0.0
+            for source, raw in accumulator.projections.items():
+                factor = factors.get(
+                    (source, accumulator.position),
+                    factors.get(source, 1.0),
+                )
+                rescaled.append((source, raw * factor))
+                proj_total_weight += weights.get(source, 1.0)
+            if rescaled and proj_total_weight > 0:
+                weighted = sum(
+                    weights.get(source, 1.0) * value
+                    for source, value in rescaled
+                ) / proj_total_weight
+                blended_projection = round(weighted, 2)
+            # projection_spread surfaces genuine cross-source disagreement:
+            # max minus min of the RESCALED contributions, but ONLY when at
+            # least two sources contributed. Fewer than two -> None (not
+            # 0.0). Deliberately NO outlier rejection — see module docstring.
+            if len(rescaled) >= 2:
+                values = [value for _, value in rescaled]
+                projection_spread = round(max(values) - min(values), 2)
+
         records.append(
             BlendedRankingRecord(
                 canonical_name=canonical_name,
                 position=accumulator.position,
                 nfl_team=accumulator.nfl_team,
                 blended_value=round(blended_value, 4),
-                blended_projection=(
-                    round(fmean(accumulator.projections), 2)
-                    if accumulator.projections
-                    else None
-                ),
+                blended_projection=blended_projection,
+                projection_spread=projection_spread,
                 consensus_rank=(
                     round(fmean(accumulator.ranks), 2) if accumulator.ranks else None
                 ),

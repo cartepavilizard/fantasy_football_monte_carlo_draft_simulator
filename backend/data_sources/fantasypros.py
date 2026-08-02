@@ -58,6 +58,22 @@ def _position_rank_number(pos_rank) -> Optional[float]:
     return float(match.group(1)) if match else None
 
 
+def _coerce_float(value) -> Optional[float]:
+    """Best-effort float coercion; missing/empty/non-numeric -> None."""
+    if value is None:
+        return None
+    try:
+        text = str(value).strip()
+    except Exception:
+        return None
+    if not text:
+        return None
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return None
+
+
 def extract_ecr_data(html: str) -> dict:
     """Pull the balanced ecrData JSON object out of the page source"""
     marker = re.search(r"ecrData\s*=\s*", html)
@@ -125,6 +141,7 @@ class FantasyProsAdapter(BaseSourceAdapter):
                     rank=row.get("rank_ecr"),
                     position_rank=_position_rank_number(row.get("pos_rank")),
                     tier=row.get("tier"),
+                    expert_rank_std=_coerce_float(row.get("rank_std")),
                     extra={"access_mode": mode},
                 )
             )

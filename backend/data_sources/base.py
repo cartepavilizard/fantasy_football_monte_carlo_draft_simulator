@@ -34,6 +34,10 @@ class SourceRecord(BaseModel):
     tier: Optional[int] = None
     adp: Optional[float] = None
     projection: Optional[float] = None
+    # Cross-expert dispersion in this source's own ranks; currently only
+    # FantasyPros supplies it (rank_std of its ~130 rankers). None on every
+    # other source and when a source omits it for a row.
+    expert_rank_std: Optional[float] = None
     extra: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -133,6 +137,7 @@ class BaseSourceAdapter(ABC):
                     tier=record.tier,
                     adp=record.adp,
                     projection=record.projection,
+                    expert_rank_std=record.expert_rank_std,
                 )
             )
         return SourceRankingBatch(

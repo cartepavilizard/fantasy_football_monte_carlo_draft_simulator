@@ -144,6 +144,51 @@ The drop stays, but it is counted and logged rather than silent.
 OUT OF SCOPE, deliberately: consensus_rank and adp remain plain
 fmean(). Picks and ordinals are already a common unit across sources,
 so raw averaging is defensible there in a way it never was for points.
+
+TIER CONFIDENCE FROM TWO UNCERTAINTY CHANNELS (H11 addendum). The blend
+carries two independent measurements of "how sure is this number":
+
+  expert_rank_std   cross-expert dispersion in ORDINAL ranks. Currently
+                    only FantasyPros supplies it (the std of its ~130
+                    expert rankers, read as rank_std off each row and
+                    carried through the adapter). None on every other
+                    source and when a source omits it for a row.
+  projection_spread max minus min of the rescaled per-source point
+                    projections (see above), None below two sources.
+
+They measure the same underlying thing in different units (ranks vs
+points), and measurement shows they agree about WHO is uncertain: the
+most-disputed top-200 players by expert_rank_std are Stefon Diggs,
+James Conner, KC Concepcion, Deebo Samuel and Jacoby Brissett — almost
+exactly the players that moved most when a third projection source was
+added. So they combine, but only after NORMALIZATION, because you
+cannot average a rank spread with a point spread.
+
+Each channel is converted to a PERCENTILE RANK within the blend's own
+records, computed over the records that carry that channel (the
+fraction of those records whose value is less than or equal to this
+record's value; ties therefore share a percentile). This
+self-calibrates and needs no magic constants that go stale when a
+source changes.
+
+  uncertainty = the MAXIMUM of the available percentiles — both when
+                both channels are present, the single one when only one
+                is, and None when neither is. The MAXIMUM, not the mean,
+                is deliberate and conservative: either channel screaming
+disagreement is enough to distrust the number, and averaging would
+let a confident channel mask a loud one.
+
+  tier_confidence = "low"    when uncertainty >= 0.75
+                   "medium"  when uncertainty >= 0.40
+                   "high"    below that
+                   None      when uncertainty is None
+
+Sanity anchors from the live 2026 ppr data: Stefon Diggs sits at
+percentile 0.913 and James Conner at 0.886 on the expert_rank_std
+channel, so both come out "low". No consumer is wired up here — making
+value_over_wait's near-tie margin or the scarcity call
+uncertainty-aware changes live draft recommendations and is a
+separate, measured follow-on (H12).
 """
 from statistics import fmean, median, pstdev
 from typing import Dict, List, Optional
@@ -209,6 +254,11 @@ class _PlayerAccumulator:
         self.adps: List[float] = []
         self.ranks: List[float] = []
         self.tiers: List[int] = []
+        # Cross-expert dispersion carried through from whichever source
+        # supplied one. First non-None wins, consistent with the per-source
+        # dedupe and the projections setdefault. Only FantasyPros supplies
+        # this today, so no cross-source reconciliation is needed.
+        self.expert_rank_std: Optional[float] = None
 
 
 def blend_batches(
@@ -267,6 +317,14 @@ def blend_batches(
                     accumulator.ranks.append(record.rank)
                 if record.tier is not None:
                     accumulator.tiers.append(record.tier)
+                # expert_rank_std: first non-None wins (consistent with the
+                # per-source dedupe and the projections setdefault). Only
+                # FantasyPros supplies this today.
+                if (
+                    record.expert_rank_std is not None
+                    and accumulator.expert_rank_std is None
+                ):
+                    accumulator.expert_rank_std = record.expert_rank_std
         if contributed:
             sources_used.append(batch.source)
 
@@ -392,6 +450,7 @@ def blend_batches(
                 blended_value=round(blended_value, 4),
                 blended_projection=blended_projection,
                 projection_spread=projection_spread,
+                expert_rank_std=accumulator.expert_rank_std,
                 consensus_rank=(
                     round(fmean(accumulator.ranks), 2) if accumulator.ranks else None
                 ),
@@ -404,6 +463,50 @@ def blend_batches(
             )
         )
     records.sort(key=lambda record: record.blended_value, reverse=True)
+
+    # Tier confidence from the two uncertainty channels. Each channel is
+    # converted to a PERCENTILE RANK within the blend's own records, computed
+    # over the records that carry that channel; uncertainty is the MAXIMUM
+    # of the available percentiles (both when both are present, the single
+    # one when only one is, None when neither is). See the module docstring
+    # addendum and BlendedRankingRecord.tier_confidence. Done after the
+    # per-record loop because the percentile needs the whole population.
+    rank_std_values = [
+        r.expert_rank_std for r in records if r.expert_rank_std is not None
+    ]
+    spread_values = [
+        r.projection_spread for r in records if r.projection_spread is not None
+    ]
+    for record in records:
+        percentiles = []
+        if record.expert_rank_std is not None and rank_std_values:
+            percentiles.append(
+                sum(
+                    1
+                    for v in rank_std_values
+                    if v <= record.expert_rank_std
+                )
+                / len(rank_std_values)
+            )
+        if record.projection_spread is not None and spread_values:
+            percentiles.append(
+                sum(
+                    1
+                    for v in spread_values
+                    if v <= record.projection_spread
+                )
+                / len(spread_values)
+            )
+        if not percentiles:
+            record.tier_confidence = None
+            continue
+        uncertainty = max(percentiles)
+        if uncertainty >= 0.75:
+            record.tier_confidence = "low"
+        elif uncertainty >= 0.40:
+            record.tier_confidence = "medium"
+        else:
+            record.tier_confidence = "high"
 
     return BlendedRanking(
         season=season,

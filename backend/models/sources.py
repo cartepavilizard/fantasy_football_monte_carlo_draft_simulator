@@ -28,6 +28,10 @@ class SourceRankingRecord(EmbeddedModel):
     tier: Optional[int] = None
     adp: Optional[float] = None
     projection: Optional[float] = None
+    # Cross-expert dispersion carried in from the source (currently only
+    # FantasyPros supplies it, as its rank_std). None on every other source
+    # and when a source omits it for a row.
+    expert_rank_std: Optional[float] = None
 
 
 class SourceRankingBatch(Model):
@@ -56,6 +60,23 @@ class BlendedRankingRecord(EmbeddedModel):
     # sources; surfaces genuine cross-source disagreement (uncertainty to
     # be consumed by tier-confidence/near-tie work, not error suppressed).
     projection_spread: Optional[float] = None
+    # Cross-expert dispersion (currently only FantasyPros's rank_std),
+    # carried through from the source record. None when no source supplied
+    # one for this player.
+    expert_rank_std: Optional[float] = None
+    # Coarse confidence label derived from the two uncertainty channels
+    # (expert_rank_std and projection_spread). Each channel is converted to
+    # a PERCENTILE RANK within the blend's own records (over the records that
+    # carry that channel); uncertainty is the MAXIMUM of the available
+    # percentiles (both, the one, or None). The maximum, not the mean, is
+    # deliberate and conservative: either channel screaming disagreement is
+    # enough to distrust the number, and averaging would let a confident
+    # channel mask a loud one. Then:
+    #   uncertainty >= 0.75 -> "low"
+    #   uncertainty >= 0.40 -> "medium"
+    #   otherwise          -> "high"
+    # None when uncertainty is None (neither channel present for the player).
+    tier_confidence: Optional[str] = None
     consensus_rank: Optional[float] = None
     adp: Optional[float] = None
     tier: Optional[int] = None

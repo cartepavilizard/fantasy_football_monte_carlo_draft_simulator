@@ -41,7 +41,7 @@ TIE_MARGIN_POINTS = 5.0
 # unchanged. A test monkeypatches this and the orchestrator sweeps it;
 # the verdict diff decides whether to adopt it. Do NOT read this from
 # the environment — it is a plain module constant on purpose.
-UNCERTAINTY_TIE_WIDENING = 0.0
+UNCERTAINTY_TIE_WIDENING = 0.5
 
 # Kickers and defenses: expert rank dispersion is meaningless here
 # (experts are indifferent about order, not uncertain about points), so

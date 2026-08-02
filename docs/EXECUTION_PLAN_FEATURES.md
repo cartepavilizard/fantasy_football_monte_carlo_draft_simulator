@@ -587,8 +587,19 @@ Drafts are ~late August and the season opens early September, so items
    two weeks; a session on 2026-08-02 was about to re-implement it before
    checking. Verify with
    `venv312/Scripts/python.exe -m pytest tests/test_f1_decoration.py -q`.
-6. **Mock-draft dry run** — a full end-to-end rehearsal before the real
-   draft.
+6. ~~**Mock-draft dry run**~~ — **DONE 2026-08-02**, against the freshly
+   adopted board, as `backend/scripts/mock_draft_dry_run.py` (re-runnable;
+   deep-copies every league, writes nothing). Both masters pass with zero
+   problems: a full 150-pick (Mahomes) and 180-pick (Skunkweed) draft runs
+   to completion, no player drafted twice, every team fills every starting
+   position, `randomized_points()` stays under the newly adopted
+   per-position ceilings, and all four skill positions carry tier data for
+   the scarcity call. **H12's hedge is confirmed firing in production** —
+   the recommendation text shows "within 6 pts" where confidence is low
+   against "within 5 pts" where it is not, which is the 0.5 widening
+   doing exactly what it was measured to do. Worth re-running after any
+   future re-sync; it is the cheapest way to catch a board that is subtly
+   unusable.
 7. **Cosmetic:** `CornerBadge` is illegible at 11-16px; `CornerBadgeSvg`
    is a drop-in replacement if wanted.
 

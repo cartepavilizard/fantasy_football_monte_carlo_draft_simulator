@@ -44,12 +44,14 @@ MASTERS = {
     "6a68d1a529cc6c50523f2022": ("Never Leaving Mahomes 2026", 10),
     "6a5aa7e98a72088bca98c230": ("Skunkweed 2026", 12),
 }
-SNAPSHOT = r"C:\fantasy-football-backups\20260802T162037Z"
-# position_max_points H5 predicted for the adopted board, before the sync ran
-EXPECTED_MAX = {
-    "qb": 354.70, "rb": 365.75, "wr": 341.29,
-    "te": 243.61, "dst": 115.15, "k": 168.96,
-}
+SNAPSHOT_ROOT = r"C:\fantasy-football-backups"
+# Pre-H2 values, kept as the floor the fixes must never regress below. These
+# are DURABLE properties, unlike the exact projections H5 predicted -- those
+# were pinned here at first and went stale on the very next
+# POST /rankings/refresh, which is the wrong thing for a guard to do. Assert
+# what must always be true, not what happened to be true on one afternoon.
+PRE_H2_KICKER_CEILING = 143.78   # espn/sleeper scale disagreement, unrescaled
+CONNER_SENTINEL_VALUE = 29.90    # espn 0.0 halving a real sleeper projection
 
 fails = []
 
@@ -76,12 +78,19 @@ async def main():
     # 1. The pre-sync snapshot still exists
     # ---------------------------------------------------------------
     print("\n-- 1. the backup that made the sync reversible --")
+    snaps = (
+        sorted(
+            d for d in os.listdir(SNAPSHOT_ROOT)
+            if os.path.exists(os.path.join(SNAPSHOT_ROOT, d, "MANIFEST.txt"))
+        )
+        if os.path.isdir(SNAPSHOT_ROOT)
+        else []
+    )
     check(
-        os.path.isdir(SNAPSHOT)
-        and os.path.exists(os.path.join(SNAPSHOT, "MANIFEST.txt"))
-        and os.path.exists(os.path.join(SNAPSHOT, "league.json")),
-        f"the pre-sync snapshot is still on disk at {SNAPSHOT} "
-        f"(restore with scripts/mongo_snapshot.py restore <dir> --yes)",
+        bool(snaps),
+        f"at least one verified snapshot is on disk under {SNAPSHOT_ROOT} "
+        f"(found {snaps}) -- restore with "
+        f"scripts/mongo_snapshot.py restore <dir> --yes",
     )
 
     # ---------------------------------------------------------------
@@ -102,20 +111,39 @@ async def main():
         if r.blended_projection is not None
     }
     check(
-        len(proj) == 710,
-        f"the blend materialises 710 projected players (got {len(proj)}) -- "
-        f"649 under H2 alone, +61 from ffanalytics",
+        len(proj) >= 700,
+        f"the blend materialises {len(proj)} projected players (>=700; it was "
+        f"672 pre-H2, 649 under H2 alone, ~710 with ffanalytics)",
     )
-    # the exact values H5 predicted before the sync
-    near(proj.get("Bijan Robinson"), 365.75, 0.5, "Bijan Robinson")
-    near(proj.get("Stefon Diggs"), 141.88, 0.5, "Stefon Diggs")
-    # 75.78, not H2's 68.15: that was the TWO-source value. Conner is the
-    # sentinel case -- espn writes 0.0 for "no projection" and it used to halve
-    # him to 29.90. With the sentinel dropped and ffanalytics added he is
-    # sleeper 59.8 (rescaled to 68.2 on espn's rb scale) averaged with
-    # ffanalytics 82.8 (rescaled ~83.4). Three sources, so a different number.
-    near(proj.get("James Conner"), 75.78, 2.0, "James Conner (was a 29.90 sentinel)")
-    near(proj.get("Brandon Aubrey"), 168.96, 0.5, "Brandon Aubrey")
+    check(
+        sum(1 for r in blend.records if r.expert_rank_std is not None) > 400,
+        f"H7's expert-dispersion channel is populated "
+        f"({sum(1 for r in blend.records if r.expert_rank_std is not None)} "
+        f"records) -- it is empty until a refresh runs after H7 shipped",
+    )
+    check(
+        sum(1 for r in blend.records if r.tier_confidence is not None) > 500,
+        f"tier_confidence is derived on "
+        f"{sum(1 for r in blend.records if r.tier_confidence is not None)} "
+        f"records",
+    )
+    # DURABLE properties of the H2 fixes -- these must hold after any refresh.
+    conner = proj.get("James Conner")
+    check(
+        conner is not None and conner > CONNER_SENTINEL_VALUE * 1.5,
+        f"James Conner is {conner}, well clear of the {CONNER_SENTINEL_VALUE} "
+        f"an espn 0.0 sentinel used to halve him to -- the sentinel drop is "
+        f"still working",
+    )
+    zeros = [
+        r.canonical_name for r in blend.records
+        if r.blended_projection is not None and r.blended_projection <= 0
+    ]
+    check(
+        not zeros,
+        f"no blended projection is <= 0 ({len(zeros)} found) -- non-positive "
+        f"values are not data",
+    )
 
     leagues = {str(lg.id): lg for lg in await engine.find(League)}
     for league_id, (name, teams) in MASTERS.items():
@@ -144,19 +172,32 @@ async def main():
             f"latest blend ({len(stale)} stale) -- the board IS the blend",
         )
         check(
-            len(live) == 710,
-            f"{name} carries 710 players (got {len(live)})",
+            len(live) >= 700,
+            f"{name} carries {len(live)} players (>=700; 671 pre-adoption)",
         )
         mp = lg.position_max_points.model_dump()
-        bad = [
-            f"{p} {mp[p]} != {EXPECTED_MAX[p]}"
-            for p in POSITIONS
-            if abs(mp[p] - EXPECTED_MAX[p]) > 0.5
-        ]
+        blend_max = {
+            pos: max(
+                (
+                    p.points[YEAR].projected_points
+                    for p in lg.players.players
+                    if p.position == pos and YEAR in p.points
+                ),
+                default=0.0,
+            )
+            for pos in POSITIONS
+        }
+        bad = [p for p in POSITIONS if abs(mp[p] - blend_max[p]) > 0.01]
         check(
             not bad,
-            f"{name} position_max_points matches what H5 predicted "
-            f"({'; '.join(bad) if bad else 'all six'})",
+            f"{name} position_max_points is consistent with its own board "
+            f"({'stale: ' + ', '.join(bad) if bad else 'all six'})",
+        )
+        check(
+            mp["k"] > PRE_H2_KICKER_CEILING,
+            f"{name} kicker ceiling {mp['k']} is above the pre-H2 "
+            f"{PRE_H2_KICKER_CEILING} -- H2's per-position rescale is adopted "
+            f"(espn projected 41% more kicker points than sleeper unrescaled)",
         )
 
         # ---- per-league tier cutoffs actually differ (H11's guarantee) ----

@@ -7,7 +7,7 @@ from .position import PositionMaxPoints, PositionTierDistributions, PositionTier
 from odmantic import EmbeddedModel
 from pydantic import BaseModel, field_validator, model_validator
 import random
-from typing import Dict, List, Literal, Union
+from typing import Dict, List, Literal, Optional, Union
 
 # Load the position tiers, determined by environment variables
 pt = PositionTiers()
@@ -144,6 +144,11 @@ class Players(EmbeddedModel):
     players: List[Player] = []
     years: List[str] = []
     ready_players: bool = False
+    # Optional team count for the league this Players belongs to; when
+    # set, the validator builds per-league tier cutoffs from it instead
+    # of the module-level ROSTER_SIZE default. Optional with a None default
+    # so already-stored documents load unchanged.
+    team_count: Optional[int] = None
 
     @model_validator(mode="before")
     def assign_players_to_positions(cls, data):
@@ -153,14 +158,19 @@ class Players(EmbeddedModel):
         if "ready_players" in data and data["ready_players"]:
             return data
 
-        # Ensure all players are Player objects
+        # Ensure all players are Player objects. Copy any input that is
+        # already a Player so the tiering below never mutates the caller's
+        # objects: two Players built from the SAME list must tier
+        # independently (the position_tier assignment must not leak back
+        # into the shared input list and overwrite the first build).
         positions = ["qb", "rb", "wr", "te", "dst", "k"]
         positions_and_players = positions + ["players"]
         for key in positions_and_players:
-            if key in data and not all(
-                [isinstance(player, Player) for player in data[key]]
-            ):
-                data[key] = [Player(**player) for player in data[key]]
+            if key in data:
+                data[key] = [
+                    player.model_copy() if isinstance(player, Player) else Player(**player)
+                    for player in data[key]
+                ]
 
         # Get the years that the players have on record
         data["years"] = []
@@ -175,8 +185,13 @@ class Players(EmbeddedModel):
             data["years"] = sorted(list(years))
 
         # Rank players within each season separately, so multi-season
-        # historical files neither crash nor compete across seasons
-        tiers = pt.model_dump()
+        # historical files neither crash nor compete across seasons.
+        # Per-league cutoffs when a team_count was supplied; otherwise the
+        # module-level ROSTER_SIZE-derived default (backward compatible).
+        team_count = data.get("team_count")
+        tiers = (
+            PositionTiers.for_team_count(team_count) if team_count else pt
+        ).model_dump()
         for year in data["years"]:
             for position in positions:
                 if position not in data:

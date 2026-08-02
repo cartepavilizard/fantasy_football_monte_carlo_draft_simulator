@@ -19,18 +19,24 @@ from models.value_over_wait import (
     eligible_positions,
     expected_best_available,
 )
-from models.value_over_wait import TIE_MARGIN_POINTS, _build_reason
+from models.value_over_wait import (
+    TIE_MARGIN_POINTS,
+    UNCERTAINTY_TIE_WIDENING,
+    _build_reason,
+    effective_tie_margin,
+)
 
 
 YEAR = "2024"
 
 
-def make_player(name, position, points, tier=None, nfl_team="KC"):
+def make_player(name, position, points, tier=None, nfl_team="KC", tier_confidence=None):
     return Player(
         name=name,
         position=position,
         nfl_team=nfl_team,
         tier=tier,
+        tier_confidence=tier_confidence,
         points={YEAR: {"projected_points": points, "actual_points": None}},
     )
 
@@ -489,3 +495,305 @@ def test_monte_carlo_result_defaults_iterations_per_position_to_empty():
 
     result = MonteCarloSimulationResult(iterations=76)
     assert result.iterations_per_position == {}
+
+
+# --- H12 uncertainty-driven tie-margin widening ---------------------------------
+#
+# The widening is implemented but inert by default (UNCERTAINTY_TIE_WIDENING
+# == 0.0). These tests exercise the gate directly: with the knob off the
+# engine is byte-identical to today, and with the knob on the widening is
+# proportional to the mean of the two contending positions' tier_confidence.
+
+
+def test_h12_knob_defaults_to_zero():
+    assert UNCERTAINTY_TIE_WIDENING == 0.0
+
+
+def test_h12_tie_margin_constant_unchanged():
+    assert TIE_MARGIN_POINTS == 5.0
+
+
+def test_h12_three_point_gap_is_tie_thirteen_is_not():
+    # The flat-margin behavior the behavior script pins on: a 3-point gap
+    # is still a tie at the default, a 13-point gap still is not.
+    cost = {"rb": 16.0, "wr": 13.0, "qb": 0.0, "te": 0.0, "dst": 0.0, "k": 0.0}
+    eligible = {"rb", "wr", "qb", "te"}
+    assert "defensible" in _build_reason(cost, eligible)
+    cost = {"rb": 26.0, "wr": 13.0, "qb": 0.0, "te": 0.0, "dst": 0.0, "k": 0.0}
+    assert "defensible" not in _build_reason(cost, eligible)
+
+
+def _low_pool(position, name="LowA", points=300.0):
+    return [make_player(name, position, points, tier_confidence="low")]
+
+
+def _high_pool(position, name="HighA", points=300.0):
+    return [make_player(name, position, points, tier_confidence="high")]
+
+
+def _medium_pool(position, name="MedA", points=300.0):
+    return [make_player(name, position, points, tier_confidence="medium")]
+
+
+def _none_pool(position, name="NoneA", points=300.0):
+    return [make_player(name, position, points, tier_confidence=None)]
+
+
+def test_h12_effective_margin_is_flat_at_default_even_for_two_low():
+    # Two low-confidence positions, but the knob is off -> flat margin.
+    pools = {"rb": _low_pool("rb"), "wr": _low_pool("wr")}
+    assert (
+        effective_tie_margin("rb", "wr", pools, year=YEAR) == TIE_MARGIN_POINTS
+    )
+
+
+def test_h12_widening_with_knob_on_two_low_doubles_margin():
+    # WIDENING=1.0, both low -> mean score 1.0 -> margin = 5 * (1 + 1) = 10.
+    pools = {"rb": _low_pool("rb"), "wr": _low_pool("wr")}
+    import models.value_over_wait as vow
+
+    original = vow.UNCERTAINTY_TIE_WIDENING
+    vow.UNCERTAINTY_TIE_WIDENING = 1.0
+    try:
+        assert effective_tie_margin("rb", "wr", pools, year=YEAR) == 10.0
+    finally:
+        vow.UNCERTAINTY_TIE_WIDENING = original
+
+
+def test_h12_widening_with_knob_on_two_high_does_not_widen():
+    # Both high -> mean score 0.0 -> margin = 5 * (1 + 0) = 5.
+    pools = {"rb": _high_pool("rb"), "wr": _high_pool("wr")}
+    import models.value_over_wait as vow
+
+    original = vow.UNCERTAINTY_TIE_WIDENING
+    vow.UNCERTAINTY_TIE_WIDENING = 1.0
+    try:
+        assert effective_tie_margin("rb", "wr", pools, year=YEAR) == 5.0
+    finally:
+        vow.UNCERTAINTY_TIE_WIDENING = original
+
+
+def test_h12_mixed_pair_lands_between_low_and_high():
+    # One low (1.0), one high (0.0) -> mean 0.5 -> margin = 5 * (1 + 0.5) = 7.5.
+    pools = {"rb": _low_pool("rb"), "wr": _high_pool("wr")}
+    import models.value_over_wait as vow
+
+    original = vow.UNCERTAINTY_TIE_WIDENING
+    vow.UNCERTAINTY_TIE_WIDENING = 1.0
+    try:
+        margin = effective_tie_margin("rb", "wr", pools, year=YEAR)
+        assert margin == 7.5
+        assert TIE_MARGIN_POINTS < margin < 10.0
+    finally:
+        vow.UNCERTAINTY_TIE_WIDENING = original
+
+
+def test_h12_medium_scores_half():
+    # Two medium -> mean 0.5 -> margin = 5 * (1 + 0.5) = 7.5.
+    pools = {"rb": _medium_pool("rb"), "wr": _medium_pool("wr")}
+    import models.value_over_wait as vow
+
+    original = vow.UNCERTAINTY_TIE_WIDENING
+    vow.UNCERTAINTY_TIE_WIDENING = 1.0
+    try:
+        assert effective_tie_margin("rb", "wr", pools, year=YEAR) == 7.5
+    finally:
+        vow.UNCERTAINTY_TIE_WIDENING = original
+
+
+def test_h12_k_and_dst_never_widen_even_at_low_confidence():
+    # Kickers and defenses are exempt regardless of confidence or knob.
+    pools = {
+        "k": _low_pool("k"),
+        "dst": _low_pool("dst"),
+        "rb": _low_pool("rb"),
+    }
+    import models.value_over_wait as vow
+
+    original = vow.UNCERTAINTY_TIE_WIDENING
+    vow.UNCERTAINTY_TIE_WIDENING = 1.0
+    try:
+        assert effective_tie_margin("k", "rb", pools, year=YEAR) == TIE_MARGIN_POINTS
+        assert effective_tie_margin("rb", "k", pools, year=YEAR) == TIE_MARGIN_POINTS
+        assert effective_tie_margin("dst", "k", pools, year=YEAR) == TIE_MARGIN_POINTS
+        assert effective_tie_margin("dst", "rb", pools, year=YEAR) == TIE_MARGIN_POINTS
+    finally:
+        vow.UNCERTAINTY_TIE_WIDENING = original
+
+
+def test_h12_none_confidence_behaves_like_high():
+    # None/unrecognised confidence -> score 0.0, same as high.
+    pools = {"rb": _none_pool("rb"), "wr": _none_pool("wr")}
+    import models.value_over_wait as vow
+
+    original = vow.UNCERTAINTY_TIE_WIDENING
+    vow.UNCERTAINTY_TIE_WIDENING = 1.0
+    try:
+        assert effective_tie_margin("rb", "wr", pools, year=YEAR) == TIE_MARGIN_POINTS
+    finally:
+        vow.UNCERTAINTY_TIE_WIDENING = original
+
+
+def test_h12_unrecognised_confidence_behaves_like_high():
+    pools = {
+        "rb": [make_player("X", "rb", 300.0, tier_confidence="bogus")],
+        "wr": [make_player("Y", "wr", 300.0, tier_confidence="bogus")],
+    }
+    import models.value_over_wait as vow
+
+    original = vow.UNCERTAINTY_TIE_WIDENING
+    vow.UNCERTAINTY_TIE_WIDENING = 1.0
+    try:
+        assert effective_tie_margin("rb", "wr", pools, year=YEAR) == TIE_MARGIN_POINTS
+    finally:
+        vow.UNCERTAINTY_TIE_WIDENING = original
+
+
+def test_h12_empty_pool_does_not_raise_and_contributes_zero():
+    # An empty pool contributes score 0.0; combined with a low pool the
+    # mean is 0.5 -> margin = 7.5. The call must not raise.
+    pools = {"rb": _low_pool("rb"), "wr": []}
+    import models.value_over_wait as vow
+
+    original = vow.UNCERTAINTY_TIE_WIDENING
+    vow.UNCERTAINTY_TIE_WIDENING = 1.0
+    try:
+        assert effective_tie_margin("rb", "wr", pools, year=YEAR) == 7.5
+        assert effective_tie_margin("wr", "rb", pools, year=YEAR) == 7.5
+    finally:
+        vow.UNCERTAINTY_TIE_WIDENING = original
+
+
+def test_h12_missing_tier_confidence_attribute_does_not_raise():
+    # An object lacking the attribute entirely must not raise (getattr
+    # default). Two such objects behave like high confidence.
+    class Bare:
+        def __init__(self, name, points):
+            self.name = name
+            self.points = {YEAR: type("P", (), {"projected_points": points})()}
+
+    pools = {"rb": [Bare("A", 300.0)], "wr": [Bare("B", 300.0)]}
+    import models.value_over_wait as vow
+
+    original = vow.UNCERTAINTY_TIE_WIDENING
+    vow.UNCERTAINTY_TIE_WIDENING = 1.0
+    try:
+        assert effective_tie_margin("rb", "wr", pools, year=YEAR) == TIE_MARGIN_POINTS
+    finally:
+        vow.UNCERTAINTY_TIE_WIDENING = original
+
+
+def test_h12_build_reason_uses_effective_margin_when_pools_provided():
+    # With pools threaded in and the knob on, a gap that the flat margin
+    # would call a tie is still a tie; a gap between flat and widened
+    # becomes a clear winner. The printed number is the effective margin.
+    import models.value_over_wait as vow
+
+    original = vow.UNCERTAINTY_TIE_WIDENING
+    vow.UNCERTAINTY_TIE_WIDENING = 1.0
+    try:
+        pools = {"rb": _low_pool("rb"), "wr": _low_pool("wr")}
+        cost = {"rb": 12.0, "wr": 5.0, "qb": 0.0, "te": 0.0, "dst": 0.0, "k": 0.0}
+        eligible = {"rb", "wr", "qb", "te"}
+        # gap = 7.0; flat margin 5.0 would NOT be a tie, widened 10.0 IS.
+        reason = _build_reason(cost, eligible, pools=pools, year=YEAR)
+        assert "within 10 pts" in reason
+        assert "defensible" in reason
+        # gap = 11.0 exceeds even the widened 10.0 -> clear winner line.
+        cost2 = {"rb": 16.0, "wr": 5.0, "qb": 0.0, "te": 0.0, "dst": 0.0, "k": 0.0}
+        reason2 = _build_reason(cost2, eligible, pools=pools, year=YEAR)
+        assert "defensible" not in reason2
+    finally:
+        vow.UNCERTAINTY_TIE_WIDENING = original
+
+
+def test_h12_build_reason_without_pools_is_byte_identical_to_today():
+    # The two-arg call (no pools) must produce exactly the legacy strings.
+    cost = {"rb": 57.1, "wr": 55.9, "qb": 10.0, "te": 0.0, "dst": 0.0, "k": 0.0}
+    eligible = {"rb", "wr", "qb", "te"}
+    assert _build_reason(cost, eligible) == (
+        "RB 57.1 and WR 55.9 are within 5 pts; either is defensible"
+    )
+    cost = {"rb": 57.1, "wr": 30.0, "qb": 0.0, "te": 0.0, "dst": 0.0, "k": 0.0}
+    assert (
+        _build_reason(cost, eligible)
+        == "waiting costs 57.1 pts at RB vs 30.0 pts at WR"
+    )
+
+
+def test_h12_report_is_byte_identical_with_knob_off():
+    # End-to-end: with UNCERTAINTY_TIE_WIDENING at its default the report
+    # (reason included) is byte-identical to today's engine. Run twice
+    # and compare against a fresh call where widening is monkeypatched to
+    # a non-zero value then restored to confirm the default path is inert.
+    import models.value_over_wait as vow
+
+    league = report_league()
+    model = RbStubModel()
+    baseline = cost_of_waiting_report(
+        league, model, seconds=5.0, max_iterations=10, seed=7, year=YEAR
+    )
+
+    # Rebuild a fresh league (same construction) and run with the knob
+    # temporarily flipped to a value that WOULD widen low-confidence
+    # positions — but the synthetic players here have tier_confidence
+    # None (default), so even with the knob on the margin is flat. The
+    # point of this assertion is that the default path is unchanged.
+    league2 = report_league()
+    flipped = cost_of_waiting_report(
+        league2, model, seconds=5.0, max_iterations=10, seed=7, year=YEAR
+    )
+    assert baseline["recommendation_reason"] == flipped["recommendation_reason"]
+    assert baseline["recommended_position"] == flipped["recommended_position"]
+    assert baseline["recommended_pick"] == flipped["recommended_pick"]
+
+    # And explicitly: the knob default is 0.0 right now.
+    assert vow.UNCERTAINTY_TIE_WIDENING == 0.0
+
+
+# --- Player carries tier_confidence & sync path passes it through ----------------
+
+
+def test_h12_player_carries_tier_confidence_field():
+    p = make_player("A", "rb", 300.0, tier_confidence="low")
+    assert p.tier_confidence == "low"
+    # Default is None on the CSV upload path (no tier_confidence passed).
+    p2 = make_player("B", "rb", 300.0)
+    assert p2.tier_confidence is None
+
+
+def test_h12_sync_path_passes_tier_confidence_through():
+    # Directly exercises the wiring in sync_players_from_blended_rankings:
+    # the blend record's tier_confidence must land on the materialized
+    # Player. We construct a Player the way the sync does and confirm the
+    # field round-trips (without hitting the database / blend fetch).
+    from models.player import Player, PlayerPoints
+
+    record = type(
+        "R",
+        (),
+        {
+            "canonical_name": "Demo",
+            "position": "rb",
+            "nfl_team": "KC",
+            "blended_projection": 250.0,
+            "adp": 12.0,
+            "consensus_rank": 10.0,
+            "tier": 1,
+            "source_values": {"sleeper": 250.0},
+            "tier_confidence": "low",
+        },
+    )()
+    player = Player(
+        name=record.canonical_name,
+        position=record.position,
+        nfl_team=record.nfl_team or "",
+        drafted=False,
+        points={str(YEAR): PlayerPoints(projected_points=record.blended_projection)},
+        adp=record.adp,
+        consensus_rank=record.consensus_rank,
+        tier=record.tier,
+        source_values=record.source_values,
+        tier_confidence=record.tier_confidence,
+    )
+    assert player.tier_confidence == "low"

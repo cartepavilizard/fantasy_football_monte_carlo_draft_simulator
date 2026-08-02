@@ -265,6 +265,79 @@ def test_generic_push_route_rejects_unregistered_source(client):
     assert "not-a-real-source" in response.json()["detail"]
 
 
+# ffanalytics: the R producer (backend/scripts/ffanalytics_export.R) writes
+# udk-compatible headers on purpose, so the CSV ingests through udk's
+# parser with no changes. Header spelling matches COLUMN_ALIASES exactly:
+# name, position, team, rank, "position rank", tier, projection.
+FFANALYTICS_CSV = (
+    'name,position,team,rank,"position rank",tier,projection\n'
+    "Christian McCaffrey,RB,SF,1,1,1,305\n"
+    "Josh Allen,QB,BUF,18,1,1,385\n"
+).encode()
+
+
+def test_ffanalytics_is_registered_out_of_the_box():
+    """ffanalytics ships in the registry, not wired up by hand per run."""
+    from data_sources import service
+
+    assert "ffanalytics" in service.PUSH_SOURCE_PARSERS
+    assert "ffanalytics" in service.all_sources()
+
+
+def test_ffanalytics_reuses_udk_parser():
+    """Same parser object as udk -- reuse, not duplication."""
+    from data_sources import service
+    from data_sources.udk import parse_udk_rows
+
+    assert service.PUSH_SOURCE_PARSERS["ffanalytics"] is parse_udk_rows
+    assert service.PUSH_SOURCE_PARSERS["ffanalytics"] is service.PUSH_SOURCE_PARSERS["udk"]
+
+
+def test_ffanalytics_push_route_carries_into_blend(client, five_pull_sources):
+    """
+    H10: POST /rankings/push/ffanalytics accepts the R producer's real
+    header spelling, reports the source in the blend, and a named player's
+    blended_projection actually MOVES to the three-source average.
+    """
+    client.post("/rankings/refresh")
+    baseline_blend = client.get("/rankings/blended").json()
+    baseline_cmc = next(
+        r
+        for r in baseline_blend["records"]
+        if r["canonical_name"] == "Christian McCaffrey"
+    )
+    assert "ffanalytics" not in baseline_cmc["source_values"]
+
+    upload = client.post(
+        "/rankings/push/ffanalytics",
+        files={"file": ("ffanalytics.csv", FFANALYTICS_CSV, "text/csv")},
+    )
+    assert upload.status_code == 200, upload.text
+    summary = upload.json()
+    assert summary["source"] == "ffanalytics"
+    assert "ffanalytics" in summary["blend"]["sources_used"]
+
+    blend = client.get("/rankings/blended").json()
+    cmc = next(
+        r for r in blend["records"] if r["canonical_name"] == "Christian McCaffrey"
+    )
+    assert "ffanalytics" in cmc["source_values"]
+    # espn (320) + sleeper (330) + ffanalytics (305) -> three-source mean
+    expected = round((320.0 + 330.0 + 305.0) / 3, 2)
+    assert cmc["blended_projection"] != baseline_cmc["blended_projection"]
+    assert cmc["blended_projection"] == expected
+
+
+def test_ffanalytics_registration_does_not_make_push_route_permissive(client):
+    """Registering ffanalytics did not open the route to arbitrary names."""
+    response = client.post(
+        "/rankings/push/still-not-a-real-source",
+        files={"file": ("x.csv", b"name,position\n", "text/csv")},
+    )
+    assert response.status_code == 404
+    assert "still-not-a-real-source" in response.json()["detail"]
+
+
 def test_sync_carries_udk_tiers_into_league_players(
     client, five_pull_sources, league_id
 ):

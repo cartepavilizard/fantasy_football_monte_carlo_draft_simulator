@@ -16,7 +16,7 @@
 ## Commands
 
 - Tests: `cd backend && venv312/Scripts/python.exe -m pytest -q` —
-  currently **702 passing**. Update this number when it changes.
+  currently **706 passing**. Update this number when it changes.
 - Servers: `.claude/launch.json` defines `backend` (uvicorn, port 8000) and
   `frontend` (npm run dev, port 3000). Start them with the Claude Code
   `preview_start` tool **by name**, not by hand.

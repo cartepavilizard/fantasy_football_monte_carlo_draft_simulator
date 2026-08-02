@@ -72,6 +72,12 @@ def register_push_source(name: str, parser: PushParser) -> None:
 
 register_push_source("udk", parse_udk_rows)
 
+# ffanalytics reuses udk's parser verbatim: the R producer in
+# backend/scripts/ffanalytics_export.R deliberately writes udk-compatible
+# CSV headers (name, position, team, rank, "position rank", tier, projection)
+# so parse_udk_rows reads its output with no changes. Same parser, new name.
+register_push_source("ffanalytics", parse_udk_rows)
+
 # Whose spellings become canonical, in order of preference
 ANCHOR_PRIORITY = ["espn", "sleeper", "ffc"]
 

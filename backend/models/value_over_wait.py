@@ -35,6 +35,69 @@ SKILL_POSITIONS = ["qb", "rb", "wr", "te"]
 # the user knows either pick is defensible.
 TIE_MARGIN_POINTS = 5.0
 
+# H12 gate: uncertainty-driven tie-margin widening. The widening is
+# implemented but NOT adopted — it defaults to 0.0, which means "behave
+# exactly as today", and effective_tie_margin returns TIE_MARGIN_POINTS
+# unchanged. A test monkeypatches this and the orchestrator sweeps it;
+# the verdict diff decides whether to adopt it. Do NOT read this from
+# the environment — it is a plain module constant on purpose.
+UNCERTAINTY_TIE_WIDENING = 0.0
+
+# Kickers and defenses: expert rank dispersion is meaningless here
+# (experts are indifferent about order, not uncertain about points), so
+# widening on them would be noise. effective_tie_margin never widens
+# when either contending position is one of these.
+_TIE_EXEMPT_POSITIONS = ("k", "dst")
+
+
+def _confidence_score(player) -> float:
+    """Map a player's tier_confidence to a widening contribution:
+    "low" -> 1.0, "medium" -> 0.5, "high"/None/unrecognised -> 0.0.
+    Absence of a signal is NOT evidence of uncertainty."""
+    confidence = getattr(player, "tier_confidence", None)
+    if confidence == "low":
+        return 1.0
+    if confidence == "medium":
+        return 0.5
+    return 0.0
+
+
+def _best_player(pool, year) -> object:
+    """The highest-projected undrafted player in a pool, or None for
+    an empty pool. The same player the recommendation would hand the
+    user."""
+    if not pool:
+        return None
+    return max(pool, key=lambda pl: _projection(pl, year))
+
+
+def effective_tie_margin(
+    position_a, position_b, pools, year: str = str(DRAFT_YEAR)
+) -> float:
+    """
+    The tie margin to use when comparing the cost of waiting at
+    `position_a` vs `position_b`.
+
+    - Returns TIE_MARGIN_POINTS unchanged whenever UNCERTAINTY_TIE_WIDENING
+      is 0.0 (the default — the H12 gate is inert).
+    - k and dst are exempt: always TIE_MARGIN_POINTS, no matter the
+      confidence on the players involved.
+    - Otherwise the margin is TIE_MARGIN_POINTS * (1 + WIDENING * mean
+      of the two sides' confidence scores), where each side's score is
+      read off the BEST undrafted player in that pool. An empty pool
+      contributes 0.0 and never raises.
+    """
+    if UNCERTAINTY_TIE_WIDENING == 0.0:
+        return TIE_MARGIN_POINTS
+    if position_a in _TIE_EXEMPT_POSITIONS or position_b in _TIE_EXEMPT_POSITIONS:
+        return TIE_MARGIN_POINTS
+    player_a = _best_player(pools.get(position_a, []), year)
+    player_b = _best_player(pools.get(position_b, []), year)
+    score_a = _confidence_score(player_a) if player_a is not None else 0.0
+    score_b = _confidence_score(player_b) if player_b is not None else 0.0
+    mean_score = (score_a + score_b) / 2.0
+    return TIE_MARGIN_POINTS * (1.0 + UNCERTAINTY_TIE_WIDENING * mean_score)
+
 
 def simulate_picked_sequences(
     league,
@@ -199,7 +262,7 @@ def eligible_positions(team, round_num: int, total_rounds: int, position_sizes) 
     return eligible
 
 
-def _build_reason(cost: Dict[str, float], eligible) -> str:
+def _build_reason(cost: Dict[str, float], eligible, pools=None, year: str = str(DRAFT_YEAR)) -> str:
     if not eligible:
         return "No eligible positions to recommend."
     ranked = sorted(eligible, key=lambda p: cost.get(p, 0.0), reverse=True)
@@ -208,10 +271,13 @@ def _build_reason(cost: Dict[str, float], eligible) -> str:
     if len(ranked) >= 2:
         p2 = ranked[1]
         c2 = cost.get(p2, 0.0)
-        if c1 - c2 <= TIE_MARGIN_POINTS:
+        margin = (
+            effective_tie_margin(p1, p2, pools, year) if pools is not None else TIE_MARGIN_POINTS
+        )
+        if c1 - c2 <= margin:
             return (
                 f"{p1.upper()} {c1:.1f} and {p2.upper()} {c2:.1f} are within "
-                f"{TIE_MARGIN_POINTS:.0f} pts; either is defensible"
+                f"{margin:.0f} pts; either is defensible"
             )
         return f"waiting costs {c1:.1f} pts at {p1.upper()} vs {c2:.1f} pts at {p2.upper()}"
     return f"waiting costs {c1:.1f} pts at {p1.upper()}"
@@ -328,7 +394,7 @@ def cost_of_waiting_report(
         if best is not None:
             recommended_pick = best.name
 
-    reason = _build_reason(cost, eligible)
+    reason = _build_reason(cost, eligible, pools=pools, year=year)
     your_next_pick = league.current_draft_turn + 1 + t2
 
     return {

@@ -1758,6 +1758,7 @@ async def sync_players_from_blended_rankings(
                 consensus_rank=record.consensus_rank,
                 tier=record.tier,
                 source_values=record.source_values,
+                tier_confidence=record.tier_confidence,
             )
         )
     print(

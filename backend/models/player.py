@@ -69,6 +69,8 @@ class Player(EmbeddedModel):
     consensus_rank: Union[float, None] = None
     tier: Union[int, None] = None
     source_values: Dict[str, float] = {}
+    # From the blend's tier_confidence (H7); None on the CSV upload path
+    tier_confidence: Union[str, None] = None
 
     # User-set tag (A3); None means untagged
     tag: Union[PlayerTag, None] = None

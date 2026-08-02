@@ -341,7 +341,7 @@ Contextual flags, **not hard rules** — surfaced inline where relevant.
 
 | # | Task | Routing | Notes |
 | --- | --- | --- | --- |
-| F1 | **Stacking awareness**: flag QB + pass-catcher correlation opportunities in draft suggestions and trade evaluations. | [SPLIT] → **[Sonnet]** | **Done (2026-07-17, flags served via API).** `models/correlation_flags.py` + `flags_api.py`; rho table verbatim. Remaining polish: decorating the draft `suggested` map and E1 trade reports inline (the two spec call sites) — flags available via `GET /inseason/league/{id}/strategy_flags` meanwhile. **Frontier half done — correlation weights spec'd (2026-07-11, Fable design pass): [`docs/specs/F1-stacking-correlation.md`](./specs/F1-stacking-correlation.md).** Fixed ρ table (QB+WR 0.40, QB+TE 0.35, mild rows for honesty), σ ≈ 0.45 × weekly projection, flag quotes "extra weekly swing" points; two call sites (draft `suggested` map, E1 trade report decoration); provably zero effect on any ranking or verdict. Sonnet adds the flags verbatim (trade call site after E1 lands). |
+| F1 | **Stacking awareness**: flag QB + pass-catcher correlation opportunities in draft suggestions and trade evaluations. | [SPLIT] → **[Sonnet]** | **✅ Done (2026-07-17); the "remaining polish" was ALSO done and the row went stale — verified complete 2026-08-02.** `models/correlation_flags.py` + `flags_api.py`; rho table verbatim. **Both spec call sites are wired**, contrary to what this row and operational item 5 claimed for two weeks: the draft side builds stack flags in `app.py` (the `stack_flags` block at ~line 630, surfaced as `results["stack_flags"]` keyed by position — a sibling key rather than a field on `SuggestedPick`, which is why a reader looking for it *on* the suggestion concluded it was missing), and the trade side lives in `inseason_api.py` as `_annotate_trade_stack_flags` / `_annotate_counters_stack_flags`, applied to trade evaluations, the original, and every counter. Covered by **9 passing tests** in `backend/tests/test_f1_decoration.py`, including both zero-effect tests (decoration must not perturb any pre-existing field) and a backward-compatibility test for payloads predating the flags. No new work was done for this verification — a session was about to re-implement it, which is exactly the misrouting a stale row causes. **Frontier half done — correlation weights spec'd (2026-07-11, Fable design pass): [`docs/specs/F1-stacking-correlation.md`](./specs/F1-stacking-correlation.md).** Fixed ρ table (QB+WR 0.40, QB+TE 0.35, mild rows for honesty), σ ≈ 0.45 × weekly projection, flag quotes "extra weekly swing" points; two call sites (draft `suggested` map, E1 trade report decoration); provably zero effect on any ranking or verdict. Sonnet adds the flags verbatim (trade call site after E1 lands). |
 | F2 | **Bye week planning**: warn on bye clustering at draft time; preview thin weeks in-season. | [Sonnet] | **Done (2026-07-17).** `models/bye_planning.py` + bye_outlook endpoint in `flags_api.py`; graceful no-schedule degradation. Schedule joins over data B1 already has. |
 | F3 | **Anti-correlation awareness**: flag rostering players who compete for the same touches (same-backfield RBs outside the C7 handcuff case). | [Sonnet] | **Done (2026-07-17).** In `models/correlation_flags.py` (inverted C7, handcuff pairs excluded), served with F1 flags. Reuses C7's depth relationships with an inverted lens. Same flag-only discipline as F1 (see that spec's must-nots — zero effect on rankings/verdicts). |
 
@@ -579,10 +579,14 @@ Drafts are ~late August and the season opens early September, so items
    already notes it was seeded for all 32 teams from model
    training-data knowledge and "needs a human review pass before
    relying on it."
-5. **F1 inline decoration** — still open. Flags are served via
-   `GET /inseason/league/{id}/strategy_flags`; the two spec'd call
-   sites (decorating the draft `suggested` map and E1 trade reports
-   inline) are not wired.
+5. ~~**F1 inline decoration**~~ — **CLOSED 2026-08-02: it was already
+   done.** Both call sites are wired (`app.py`'s `stack_flags` block for
+   the draft, `inseason_api.py`'s `_annotate_trade_stack_flags` /
+   `_annotate_counters_stack_flags` for trades and counters) with 9
+   passing tests. This item and the F1 row both described it as open for
+   two weeks; a session on 2026-08-02 was about to re-implement it before
+   checking. Verify with
+   `venv312/Scripts/python.exe -m pytest tests/test_f1_decoration.py -q`.
 6. **Mock-draft dry run** — a full end-to-end rehearsal before the real
    draft.
 7. **Cosmetic:** `CornerBadge` is illegible at 11-16px; `CornerBadgeSvg`

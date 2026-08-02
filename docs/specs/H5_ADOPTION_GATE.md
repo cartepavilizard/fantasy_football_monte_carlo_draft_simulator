@@ -28,7 +28,7 @@ Since then three independent things have changed, and
 
 | # | Change | Projections moved (top-200) | `position_tier` reassigned |
 | --- | --- | --- | --- |
-| 1 | **`ROSTER_SIZE` 16 → 12** (untracked `.env`) | **0** | **98 / 671** |
+| 1 | **Tier cutoffs 16 → the league's own count** (was `ROSTER_SIZE` drift; H11 made it per-league) | **0** | **147 / 671** |
 | 2 | Data refresh 07-17 → 07-28 batches | 3 / 200 | 1 / 671 |
 | 3 | **H2** (scale + sentinel fix) | **200 / 200**, mean \|Δ\| 7.13 | 6 / 649 |
 | 4 | *(optional)* **ffanalytics** as a third source | 199 / 200, mean \|Δ\| 3.92 | 19 / 649 |
@@ -104,10 +104,13 @@ explicitly.
 documents, and no branch checkout rolls that back. `mongodump` the
 `fantasy-football` database, or copy the league documents, **first**.
 
-### 2. What should `ROSTER_SIZE` be — and settle it *before* the sync?
+### 2. ~~What should `ROSTER_SIZE` be?~~ — **ANSWERED by H11 (2026-08-02)**
 
-The sync bakes whatever value is live into every tier label, so this has to
-be decided first or it gets decided by accident.
+**Resolved.** Tier cutoffs now come from `len(league.teams)`, so Mahomes
+gets 10-team cutoffs and Skunkweed 12-team ones automatically and the
+global no longer decides. Nothing to choose. The history below is kept
+because it explains why the churn a sync carries is 147 labels rather
+than none.
 
 **The name means two different things in this codebase, and that is the
 actual bug.** Verified 2026-07-31:
@@ -136,13 +139,12 @@ the wrong value is worse than a wrong value.
 
 Options, best first:
 
-1. **Derive the cutoffs from `len(league.teams)` at sync time** — tracked
-   as **H11**, and it **blocks question 1**: run it before the sync, or the
-   sync bakes the wrong cutoffs in permanently. instead of
+1. **Derive the cutoffs from `len(league.teams)` at sync time**, instead of
    from a module-level global read from the environment at import. This is
    the real fix: it is per-league by construction and deletes the ambiguity.
-   `PositionTiers` would take a team count argument rather than closing over
-   `ROSTER_SIZE`.
+   `PositionTiers` takes a team-count argument rather than closing over
+   `ROSTER_SIZE`. Tracked as **H11**, and it **blocks question 1** — run it
+   before the sync, or the sync bakes the wrong cutoffs in permanently.
 2. Rename the global to `LEAGUE_TEAM_COUNT` (and `League.roster_size` to
    `roster_slots`, or delete it — it is unread) and set it explicitly in
    `backend/.env`. Cheap, keeps the global, still wrong for one of the two

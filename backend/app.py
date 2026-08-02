@@ -1118,7 +1118,7 @@ async def add_players_to_league(
                 },
             )
         )
-    league.players = Players(players=players)
+    league.players = Players(players=players, team_count=len(league.teams))
 
     # Set the max points for each position
     league.position_max_points = create_max_points(league.players)
@@ -1785,7 +1785,7 @@ async def sync_players_from_blended_rankings(
             "Add projection-bearing sources or check the blend."
         )
 
-    league.players = Players(players=players)
+    league.players = Players(players=players, team_count=len(league.teams))
     league.position_max_points = create_max_points(league.players)
     league.ready_position_max_points = True
     await engine.save(league)
@@ -1831,7 +1831,7 @@ async def add_historical_player_data_to_league(
             )
         )
     league.position_tier_distributions = create_historical_distributions(
-        Players(players=players)
+        Players(players=players, team_count=len(league.teams))
     )
     league.ready_position_tier_distributions = True
     await engine.save(league)

@@ -202,9 +202,22 @@ async def main():
     # ---------------------------------------------------------------
     # 2. The tier churn is config drift, not H2
     # ---------------------------------------------------------------
-    print("\n-- 2. position_tier churn is ROSTER_SIZE drift, not the blend --")
-    cutoffs = PositionTiers().model_dump()
-    print(f"      PositionTiers today: qb={cutoffs['qb']} te={cutoffs['te']}")
+    print("\n-- 2. position_tier churn is cutoff drift, not the blend --")
+    # RE-MEASURED 2026-08-02 after H11. This clause originally re-tiered the
+    # board under the module-global ROSTER_SIZE (12) and measured 98 moves.
+    # H11 made cutoffs per-league, so the honest question changed: not "what
+    # does the global do" but "what will a sync ACTUALLY produce", which is
+    # now this league's own team count. Mahomes is a 10-team league, so its
+    # qb1 cutoff drops from the stored 16 to 10 and the churn is LARGER, not
+    # smaller -- 147 rather than 98. The clause is re-measured, not relaxed:
+    # the floor moved up with the finding.
+    team_count = len(live.teams)
+    cutoffs = PositionTiers.for_team_count(team_count).model_dump()
+    print(
+        f"      {live.name}: {team_count} teams -> qb={cutoffs['qb']} "
+        f"te={cutoffs['te']}  (module global ROSTER_SIZE would give "
+        f"qb={PositionTiers().model_dump()['qb']})"
+    )
     retiered = Players(
         players=[
             Player(
@@ -221,7 +234,8 @@ async def main():
                 source_values=p.source_values,
             )
             for p in live.players.players
-        ]
+        ],
+        team_count=team_count,
     )
     live_tier = {p.name: p.position_tier for p in live.players.players}
     new_tier = {p.name: p.position_tier for p in retiered.players}
@@ -240,17 +254,27 @@ async def main():
         f"tier movement below is attributable to config alone",
     )
     check(
-        len(tier_moves) >= 90,
-        f"re-tiering the live board under today's config reassigns "
-        f"{len(tier_moves)} position_tier labels with the projections frozen "
-        f"(>=90 expected; ROSTER_SIZE drifted 16 -> 12)",
+        len(tier_moves) >= 140,
+        f"re-tiering the live board under its OWN team count ({team_count}) "
+        f"reassigns {len(tier_moves)} position_tier labels with the "
+        f"projections frozen (>=140 expected post-H11; it was 98 when the "
+        f"board was re-tiered under the module global 12, and the stored "
+        f"labels were cut at 16)",
     )
     check(
         live_tier.get("Patrick Mahomes") == "qb1"
         and new_tier.get("Patrick Mahomes") == "qb2",
-        f"Patrick Mahomes qb1 -> qb2 on config alone "
+        f"Patrick Mahomes qb1 -> qb2 on cutoffs alone "
         f"(live={live_tier.get('Patrick Mahomes')}, "
         f"retiered={new_tier.get('Patrick Mahomes')})",
+    )
+    # H11's actual guarantee: the cutoff now tracks the league, so the two
+    # live leagues must disagree. A single global could never show this.
+    qb1_here = sum(1 for t in new_tier.values() if t == "qb1")
+    check(
+        qb1_here == team_count,
+        f"{live.name} tiers to exactly {team_count} qb1s under its own team "
+        f"count (got {qb1_here}) -- post-H11 the cutoff follows the league",
     )
 
     # H2's OWN tier contribution, measured on equal footing (same batches,

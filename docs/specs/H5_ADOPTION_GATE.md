@@ -93,11 +93,13 @@ is the first second opinion he has had.
 
 ## The three questions
 
-### 1. Run the sync?  — *blocked on H11, see question 2*
+### 1. ~~Run the sync?~~ — **DONE 2026-08-02 (H13)**
 
-`POST /league/{id}/player/sync` against the real draft leagues is outside a
-session's authority without being asked. If you want it run, say so
-explicitly.
+**Authorised and executed.** A verified full-database snapshot was taken
+first (`C:\fantasy-football-backups\20260802T162037Z`), then the two
+**master** leagues were synced. The nine mid-draft copies were left
+untouched on purpose — syncing one replaces its player pool and wipes its
+picks. Every number predicted below was reproduced exactly. See row H13.
 
 **Git does not protect Mongo.** The sync overwrites `projected_points`,
 `position_tier` and `position_max_points` in place across 13 league
@@ -152,7 +154,7 @@ Options, best first:
 3. Accept 12 and move on. Correct for Skunkweed, wrong for Mahomes, and the
    next person to read the name will re-introduce the drift.
 
-### 3. Wire ffanalytics in permanently?
+### 3. ~~Wire ffanalytics in permanently?~~ — **DONE 2026-08-02 (H10)**
 
 One line — `register_push_source("ffanalytics", parse_udk_rows)` in
 `backend/data_sources/service.py` — plus a round-trip test. H1 built the

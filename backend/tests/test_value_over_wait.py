@@ -505,8 +505,32 @@ def test_monte_carlo_result_defaults_iterations_per_position_to_empty():
 # proportional to the mean of the two contending positions' tier_confidence.
 
 
-def test_h12_knob_defaults_to_zero():
-    assert UNCERTAINTY_TIE_WIDENING == 0.0
+def test_h12_knob_is_adopted_at_half():
+    # H12 shipped at 0.0 (inert) and was ADOPTED at 0.5 in H13 on
+    # 2026-08-02, after the gate measured zero recommendation flips at
+    # every setting. This test tracks the adopted value; the property that
+    # actually matters -- that 0.0 restores the old engine exactly -- is
+    # pinned separately below, so lowering this constant can never silently
+    # pass as "still fine".
+    assert UNCERTAINTY_TIE_WIDENING == 0.5
+
+
+def test_h12_knob_at_zero_restores_the_flat_margin_exactly():
+    # The escape hatch has to keep working: setting the knob back to 0.0
+    # must reproduce pre-H12 behaviour for the most uncertain input there
+    # is (two low-confidence positions).
+    import models.value_over_wait as vow
+
+    pools = {"rb": _low_pool("rb"), "wr": _low_pool("wr")}
+    original = vow.UNCERTAINTY_TIE_WIDENING
+    vow.UNCERTAINTY_TIE_WIDENING = 0.0
+    try:
+        assert (
+            effective_tie_margin("rb", "wr", pools, year=YEAR)
+            == TIE_MARGIN_POINTS
+        )
+    finally:
+        vow.UNCERTAINTY_TIE_WIDENING = original
 
 
 def test_h12_tie_margin_constant_unchanged():
@@ -539,11 +563,14 @@ def _none_pool(position, name="NoneA", points=300.0):
     return [make_player(name, position, points, tier_confidence=None)]
 
 
-def test_h12_effective_margin_is_flat_at_default_even_for_two_low():
-    # Two low-confidence positions, but the knob is off -> flat margin.
-    pools = {"rb": _low_pool("rb"), "wr": _low_pool("wr")}
+def test_h12_effective_margin_at_the_adopted_setting():
+    # At the ADOPTED 0.5, two low-confidence positions widen by half:
+    # 5 * (1 + 0.5 * 1.0) = 7.5. Two high-confidence ones stay flat.
+    low = {"rb": _low_pool("rb"), "wr": _low_pool("wr")}
+    high = {"rb": _high_pool("rb"), "wr": _high_pool("wr")}
+    assert effective_tie_margin("rb", "wr", low, year=YEAR) == 7.5
     assert (
-        effective_tie_margin("rb", "wr", pools, year=YEAR) == TIE_MARGIN_POINTS
+        effective_tie_margin("rb", "wr", high, year=YEAR) == TIE_MARGIN_POINTS
     )
 
 
@@ -722,10 +749,11 @@ def test_h12_build_reason_without_pools_is_byte_identical_to_today():
 
 
 def test_h12_report_is_byte_identical_with_knob_off():
-    # End-to-end: with UNCERTAINTY_TIE_WIDENING at its default the report
-    # (reason included) is byte-identical to today's engine. Run twice
-    # and compare against a fresh call where widening is monkeypatched to
-    # a non-zero value then restored to confirm the default path is inert.
+    # End-to-end escape hatch: forcing UNCERTAINTY_TIE_WIDENING to 0.0
+    # reproduces the pre-H12 engine exactly, reason string included. The
+    # knob is ADOPTED at 0.5 since H13, so this pins the rollback path
+    # rather than the default -- if turning it off ever stops restoring the
+    # old behaviour, the adoption is no longer reversible.
     import models.value_over_wait as vow
 
     league = report_league()
@@ -735,20 +763,24 @@ def test_h12_report_is_byte_identical_with_knob_off():
     )
 
     # Rebuild a fresh league (same construction) and run with the knob
-    # temporarily flipped to a value that WOULD widen low-confidence
-    # positions — but the synthetic players here have tier_confidence
-    # None (default), so even with the knob on the margin is flat. The
-    # point of this assertion is that the default path is unchanged.
+    # forced off. These synthetic players carry tier_confidence None, so
+    # the two runs must agree exactly either way; the assertion is that
+    # switching the feature off changes nothing that was not the feature.
     league2 = report_league()
-    flipped = cost_of_waiting_report(
-        league2, model, seconds=5.0, max_iterations=10, seed=7, year=YEAR
-    )
+    original = vow.UNCERTAINTY_TIE_WIDENING
+    vow.UNCERTAINTY_TIE_WIDENING = 0.0
+    try:
+        flipped = cost_of_waiting_report(
+            league2, model, seconds=5.0, max_iterations=10, seed=7, year=YEAR
+        )
+    finally:
+        vow.UNCERTAINTY_TIE_WIDENING = original
     assert baseline["recommendation_reason"] == flipped["recommendation_reason"]
     assert baseline["recommended_position"] == flipped["recommended_position"]
     assert baseline["recommended_pick"] == flipped["recommended_pick"]
 
     # And explicitly: the knob default is 0.0 right now.
-    assert vow.UNCERTAINTY_TIE_WIDENING == 0.0
+    assert vow.UNCERTAINTY_TIE_WIDENING == 0.5  # restored to the adopted value
 
 
 # --- Player carries tier_confidence & sync path passes it through ----------------

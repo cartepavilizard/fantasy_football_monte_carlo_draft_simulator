@@ -360,3 +360,147 @@ def test_factors_are_computed_per_position_not_pooled():
     assert by_name["RB 0"] == approx(200.0, abs=1e-6)
     assert by_name["K 0"] == approx(140.0, abs=1e-6)
 
+
+# --- expert_rank_std & tier_confidence (H11) --------------------------------
+#
+# expert_rank_std is cross-expert dispersion carried through from the
+# source (currently only FantasyPros's rank_std). tier_confidence is a
+# coarse label derived from two uncertainty channels -- expert_rank_std
+# and projection_spread -- each converted to a PERCENTILE RANK within the
+# blend's own records; uncertainty is the MAXIMUM of the available
+# percentiles (max, not mean: either channel screaming disagreement is
+# enough to distrust the number). See blend.py module docstring addendum.
+
+def test_expert_rank_std_reaches_blended_record():
+    # A source that supplies expert_rank_std carries it through to the
+    # BlendedRankingRecord verbatim.
+    fp = batch(
+        "fantasypros",
+        [
+            record("RB 1", "RB", rank=1.0, expert_rank_std=5.0),
+            record("RB 2", "RB", rank=2.0, expert_rank_std=25.0),
+            record("RB 3", "RB", rank=3.0, expert_rank_std=50.0),
+        ],
+    )
+    blend = blend_batches([fp], season=2024, scoring_format="ppr")
+    by_name = {r.canonical_name: r for r in blend.records}
+    assert by_name["RB 1"].expert_rank_std == 5.0
+    assert by_name["RB 2"].expert_rank_std == 25.0
+    assert by_name["RB 3"].expert_rank_std == 50.0
+
+
+def test_tier_confidence_none_when_neither_channel_present():
+    # Single source, no projection_spread (needs two) and no expert_rank_std:
+    # the player carries neither uncertainty channel, so tier_confidence
+    # must be None rather than a fabricated label.
+    ffc = batch(
+        "ffc",
+        [
+            record("RB 1", "RB", adp=1.0),
+            record("RB 2", "RB", adp=2.0),
+            record("RB 3", "RB", adp=3.0),
+        ],
+    )
+    blend = blend_batches([ffc], season=2024, scoring_format="ppr")
+    for r in blend.records:
+        assert r.expert_rank_std is None
+        assert r.projection_spread is None
+        assert r.tier_confidence is None
+
+
+def test_top_of_both_spreads_low_while_consensus_high():
+    # Ten RBs from fantasypros with rank_std 1..9 and 100 (Disputed at the
+    # top). Only Disputed gets a second projection source, so only he
+    # carries projection_spread; the other nine carry only rank_std.
+    fp = batch(
+        "fantasypros",
+        [record(f"RB {i}", "RB", rank=float(i), expert_rank_std=float(i))
+         for i in range(1, 10)]
+        + [record("Disputed", "RB", rank=10.0, expert_rank_std=100.0,
+                  projection=300.0)],
+    )
+    sleeper = batch(
+        "sleeper",
+        [record("Disputed", "RB", projection=150.0, adp=10.0)],
+    )
+    blend = blend_batches([fp, sleeper], season=2024, scoring_format="ppr")
+    by_name = {r.canonical_name: r for r in blend.records}
+    disputed = by_name["Disputed"]
+    consensus = by_name["RB 1"]  # lowest rank_std -> lowest percentile
+    # Disputed: rank_std percentile 10/10 = 1.0, projection_spread the only
+    # carrier so 1.0 -> max 1.0 -> "low".
+    assert disputed.tier_confidence == "low"
+    # Consensus: rank_std percentile 1/10 = 0.1, no projection_spread ->
+    # uncertainty 0.1 -> "high".
+    assert consensus.tier_confidence == "high"
+
+
+def test_max_not_mean_one_channel_high_other_low_follows_high():
+    # Mixed sits at the BOTTOM of the rank_std channel but the TOP (well,
+    # near-top) of the projection_spread channel. The MAX rule must make
+    # him "low"; a MEAN would average 0.1 and 0.8 to 0.45 -> "medium".
+    # Asserting "low" therefore pins down max-not-mean.
+    fp = batch(
+        "fantasypros",
+        [record("Mixed", "RB", rank=1.0, expert_rank_std=1.0)]
+        + [record(f"Fill {i}", "RB", rank=float(i + 1), expert_rank_std=float(5 + i))
+           for i in range(9)],  # rank_std 5..13, all above Mixed's 1.0
+    )
+    # Five players get BOTH projection sources -> projection_spread channel
+    # has five carriers. Spreads (no rescale: only 5 pairs < MIN_OVERLAP):
+    #   E:200 (top)  Mixed:150  A:10  B:5  C:2
+    # Mixed's projection_spread percentile = 4/5 = 0.8.
+    espn = batch(
+        "espn",
+        [
+            record("E", "RB", projection=300.0, adp=1.0),
+            record("Mixed", "RB", projection=300.0, adp=2.0),
+            record("A", "RB", projection=200.0, adp=3.0),
+            record("B", "RB", projection=200.0, adp=4.0),
+            record("C", "RB", projection=200.0, adp=5.0),
+        ],
+    )
+    sleeper = batch(
+        "sleeper",
+        [
+            record("E", "RB", projection=100.0, adp=1.0),
+            record("Mixed", "RB", projection=150.0, adp=2.0),
+            record("A", "RB", projection=190.0, adp=3.0),
+            record("B", "RB", projection=195.0, adp=4.0),
+            record("C", "RB", projection=198.0, adp=5.0),
+        ],
+    )
+    blend = blend_batches([fp, espn, sleeper], season=2024, scoring_format="ppr")
+    mixed = next(r for r in blend.records if r.canonical_name == "Mixed")
+    # rank_std percentile 1/10 = 0.1; projection_spread percentile 4/5 = 0.8.
+    # Max -> 0.8 -> "low". (Mean would be 0.45 -> "medium".)
+    assert mixed.tier_confidence == "low"
+
+
+def test_blended_value_and_projection_unchanged_by_uncertainty_row():
+    # expert_rank_std and tier_confidence are additive metadata; they must
+    # not perturb blended_value or blended_projection. Same shape as
+    # test_zscores_within_position_per_source but with expert_rank_std set
+    # on every row -- the blended z-scores must come out identical.
+    espn = batch(
+        "espn",
+        [
+            record("Alpha Back", "RB", projection=300.0, expert_rank_std=5.0),
+            record("Bravo Back", "RB", projection=250.0, expert_rank_std=15.0),
+            record("Charlie Back", "RB", projection=200.0, expert_rank_std=40.0),
+        ],
+    )
+    blend = blend_batches([espn], season=2024, scoring_format="ppr")
+    values = {r.canonical_name: r.blended_value for r in blend.records}
+    assert values["Alpha Back"] == approx(Z, abs=1e-3)
+    assert values["Bravo Back"] == approx(0.0, abs=1e-3)
+    assert values["Charlie Back"] == approx(-Z, abs=1e-3)
+    # Single projection source -> blended_projection is the raw projection
+    # (rescale factor 1.0), and projection_spread is None.
+    proj = {r.canonical_name: r.blended_projection for r in blend.records}
+    assert proj["Alpha Back"] == approx(300.0)
+    assert proj["Bravo Back"] == approx(250.0)
+    assert proj["Charlie Back"] == approx(200.0)
+    for r in blend.records:
+        assert r.projection_spread is None
+

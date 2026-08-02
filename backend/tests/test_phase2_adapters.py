@@ -26,6 +26,7 @@ FP_PLAYERS = {
             "rank_ecr": 1,
             "pos_rank": "RB1",
             "tier": 1,
+            "rank_std": 0.8,
         },
         {
             "player_name": "Dallas Cowboys",
@@ -34,11 +35,50 @@ FP_PLAYERS = {
             "rank_ecr": 130,
             "pos_rank": "DST5",
             "tier": 2,
+            "rank_std": 15.2,
         },
         {  # IDP row must be filtered out
             "player_name": "Some Linebacker",
             "player_position_id": "LB",
             "rank_ecr": 400,
+        },
+    ]
+}
+
+# Fixture exercising the rank_std coercion paths (missing / empty /
+# non-numeric) without disturbing the count-based assertions on FP_PLAYERS.
+FP_STD_COERCION_PLAYERS = {
+    "players": [
+        {
+            "player_name": "Has Std",
+            "player_position_id": "WR",
+            "rank_ecr": 10,
+            "pos_rank": "WR1",
+            "tier": 1,
+            "rank_std": 22.5,
+        },
+        {  # missing rank_std key entirely
+            "player_name": "Missing Std",
+            "player_position_id": "WR",
+            "rank_ecr": 11,
+            "pos_rank": "WR2",
+            "tier": 1,
+        },
+        {  # empty string
+            "player_name": "Empty Std",
+            "player_position_id": "WR",
+            "rank_ecr": 12,
+            "pos_rank": "WR3",
+            "tier": 1,
+            "rank_std": "",
+        },
+        {  # non-numeric string
+            "player_name": "Bad Std",
+            "player_position_id": "WR",
+            "rank_ecr": 13,
+            "pos_rank": "WR4",
+            "tier": 1,
+            "rank_std": "n/a",
         },
     ]
 }
@@ -88,6 +128,39 @@ def test_fantasypros_falls_back_from_api_to_page():
 def test_ecr_extraction_fails_loudly_when_markup_changes():
     with pytest.raises(SourceFetchError, match="ecrData"):
         extract_ecr_data("<html>a cloudflare interstitial</html>")
+
+
+def test_fantasypros_captures_rank_std_as_expert_rank_std():
+    transport = FakeTransport(payload=FP_PLAYERS)
+    adapter = FantasyProsAdapter(api_key="secret-key", transport=transport)
+    records = asyncio.run(adapter.fetch(2024, "ppr"))
+    by_name = {r.raw_name: r for r in records}
+    assert by_name["Christian McCaffrey"].expert_rank_std == 0.8
+    assert by_name["Dallas Cowboys"].expert_rank_std == 15.2
+
+
+def test_fantasypros_missing_or_nonnumeric_rank_std_yields_none():
+    transport = FakeTransport(payload=FP_STD_COERCION_PLAYERS)
+    adapter = FantasyProsAdapter(api_key="secret-key", transport=transport)
+    records = asyncio.run(adapter.fetch(2024, "ppr"))
+    by_name = {r.raw_name: r for r in records}
+    # A present numeric rank_std is captured as a float.
+    assert by_name["Has Std"].expert_rank_std == 22.5
+    # Missing key, empty string, and non-numeric all degrade to None
+    # rather than raising — the adapter must never crash on a bad row.
+    assert by_name["Missing Std"].expert_rank_std is None
+    assert by_name["Empty Std"].expert_rank_std is None
+    assert by_name["Bad Std"].expert_rank_std is None
+
+
+def test_fantasypros_expert_rank_std_survives_fetch_batch():
+    transport = FakeTransport(payload=FP_PLAYERS)
+    adapter = FantasyProsAdapter(api_key="secret-key", transport=transport)
+    batch_doc = asyncio.run(adapter.fetch_batch(2024, "ppr"))
+    assert batch_doc.success
+    by_name = {r.raw_name: r for r in batch_doc.records}
+    assert by_name["Christian McCaffrey"].expert_rank_std == 0.8
+    assert by_name["Dallas Cowboys"].expert_rank_std == 15.2
 
 
 # --- Yahoo --------------------------------------------------------------------

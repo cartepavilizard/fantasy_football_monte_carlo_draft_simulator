@@ -136,13 +136,12 @@ the wrong value is worse than a wrong value.
 
 Options, best first:
 
-1. **Derive the cutoffs from `len(league.teams)` at sync time** — tracked
-   as **H11**, and it **blocks question 1**: run it before the sync, or the
-   sync bakes the wrong cutoffs in permanently. instead of
+1. **Derive the cutoffs from `len(league.teams)` at sync time**, instead of
    from a module-level global read from the environment at import. This is
    the real fix: it is per-league by construction and deletes the ambiguity.
-   `PositionTiers` would take a team count argument rather than closing over
-   `ROSTER_SIZE`.
+   `PositionTiers` takes a team-count argument rather than closing over
+   `ROSTER_SIZE`. Tracked as **H11**, and it **blocks question 1** — run it
+   before the sync, or the sync bakes the wrong cutoffs in permanently.
 2. Rename the global to `LEAGUE_TEAM_COUNT` (and `League.roster_size` to
    `roster_slots`, or delete it — it is unread) and set it explicitly in
    `backend/.env`. Cheap, keeps the global, still wrong for one of the two

@@ -132,6 +132,18 @@ MATCHUP_PRIOR_GAMES = float(os.getenv("MATCHUP_PRIOR_GAMES", 4))
 MATCHUP_TILT_ALPHA = float(os.getenv("MATCHUP_TILT_ALPHA", 0.5))
 MATCHUP_MAX_TILT = float(os.getenv("MATCHUP_MAX_TILT", 0.10))
 
+# Preseason strength of schedule (H8). C2/C5 are structurally neutral
+# before week 1 of the season being drafted, so this is the one
+# draft-time SOS signal: last season's real, full-season defense-vs-
+# position points-allowed ratio (from nflverse, not the roster subsample
+# C2 uses), carried forward as a prior for the upcoming season. That
+# carry-forward is inherently weaker than C2's same-season signal —
+# rosters, coordinators and schemes turn over — so the observed ratio is
+# damped toward neutral (1.0) by PRESEASON_SOS_DAMPING before the same
+# MULTIPLIER_CLAMP bounds C2 uses. Default 0.5 means a defense that
+# allowed 40% more than average last season carries forward as +20%.
+PRESEASON_SOS_DAMPING = float(os.getenv("PRESEASON_SOS_DAMPING", 0.5))
+
 # Lineup optimizer (Phase C, task C1). The Thursday-morning pull syncs
 # all leagues then leaves a lineup_review notification, so Thursday
 # decisions are made on fresh data; off by default like every scheduled

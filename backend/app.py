@@ -1259,6 +1259,44 @@ async def get_blended_rankings(
     return await get_latest_blend(season, scoring_format)
 
 
+@app.post("/rankings/preseason_sos/refresh", tags=["rankings"])
+async def refresh_preseason_sos(
+    target_season: int = DRAFT_YEAR, source_season: Optional[int] = None
+):
+    """
+    H8: rebuild the draft-time strength-of-schedule prior from last
+    completed season's real, full-league defense-vs-position points
+    allowed (nflverse), damped toward neutral (see
+    models.config.PRESEASON_SOS_DAMPING) and stored per position/defense
+    for target_season. C2/C5 already cover in-season SOS; this is the
+    only draft-time gap they leave, and it is a genuinely weaker signal
+    since a season of roster/coaching turnover sits between the source
+    data and the season being drafted.
+    """
+    from data_sources.preseason_sos import ingest_preseason_sos
+
+    return await ingest_preseason_sos(engine, target_season, source_season)
+
+
+@app.get("/rankings/preseason_sos", tags=["rankings"])
+async def get_preseason_sos(
+    target_season: int = DRAFT_YEAR,
+    position: Optional[str] = None,
+    defense: Optional[str] = None,
+):
+    """
+    Read the stored draft-time SOS table (or one position/defense entry,
+    defaulting to neutral if unfetched). Cached-only — never fetches;
+    run POST /rankings/preseason_sos/refresh first.
+    """
+    from models.preseason_sos import preseason_defense_strength, preseason_sos_for
+
+    strength = await preseason_defense_strength(engine, target_season)
+    if position or defense:
+        return preseason_sos_for(strength, position, defense)
+    return strength
+
+
 async def _ingest_push_source(
     source: str, file: UploadFile, season: int, scoring_format: str
 ) -> dict:
